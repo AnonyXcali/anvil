@@ -1,11 +1,39 @@
-node_modules/
-dist/
-coverage/
-
+# env
 .env
 .env.*
 !.env.example
 
+# SSH/private keys
+*.pem
+*.key
+id_rsa
+id_rsa.pub
+id_ed25519
+id_ed25519.pub
+azure_preview_vm_key.pem
+
+# Terraform secrets/state
+*.tfvars
+*.tfvars.json
+terraform.tfstate
+terraform.tfstate.*
+.terraform/
+.terraform.lock.hcl
+
+# logs/runtime
+logs/
+*.log
+
+# generated/build
+dist/
+build/
+coverage/
+node_modules/
+
+# local generated projects/build workspaces
+tmp/
+.tmp/
+builds/
+preview-builds/
+generated-projects/
 .idea/
-.pnpm-store/
-vast-cookie.txt
