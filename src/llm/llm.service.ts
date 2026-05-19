@@ -54,20 +54,21 @@ export class LlmService {
   }
 
   private async getAuthCookie(): Promise<string> {
-    const url = this.configService.getOrThrow('VAST_AUTH_URL', {
-      infer: true,
-    });
-    const response = await fetch(url, {
-      redirect: 'manual',
-    });
-
-    const setCookie = response.headers.get('set-cookie');
-
-    if (!setCookie) {
-      throw new Error('Failed to get Vast auth cookie');
-    }
-
-    return setCookie.split(';')[0];
+    // const url = this.configService.getOrThrow('VAST_AUTH_URL', {
+    //   infer: true,
+    // });
+    // const response = await fetch(url, {
+    //   redirect: 'manual',
+    // });
+    //
+    // const setCookie = response.headers.get('set-cookie');
+    //
+    // if (!setCookie) {
+    //   throw new Error('Failed to get Vast auth cookie');
+    // }
+    //
+    // return setCookie.split(';')[0];
+    return '';
   }
 
   async chat(message: string) {

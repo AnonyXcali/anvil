@@ -33,4 +33,8 @@ export class CodeGenService {
       status: 'queued',
     };
   }
+
+  async getJob(id: string) {
+    return await this.queue.getJob(id);
+  }
 }
