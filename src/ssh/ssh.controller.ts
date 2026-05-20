@@ -1,4 +1,4 @@
-import { Controller, Post, Body } from '@nestjs/common';
+import { Controller, Post, Body, Get } from '@nestjs/common';
 import { SshService } from './ssh.service';
 
 @Controller('ssh')
@@ -8,5 +8,10 @@ export class SshController {
   async handleRunCommand(@Body() body: { command: string }) {
     const { command } = body;
     return await this.sshService.runCommand(command);
+  }
+
+  @Get()
+  async testConnect() {
+    return await this.sshService.sshConnect();
   }
 }

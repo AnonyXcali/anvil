@@ -39,36 +39,35 @@ export class LlmService {
   constructor(private readonly configService: ConfigService<AppEnv, true>) {}
 
   async onModuleInit() {
-    this.cookie = await this.getAuthCookie();
-    this.client = new OpenAI({
-      apiKey: 'not-needed',
-      baseURL: buildVllmOpenAIBaseURL(
-        this.configService.getOrThrow('VAST_BASE_URL', {
-          infer: true,
-        }),
-      ),
-      defaultHeaders: {
-        Cookie: this.cookie,
-      },
-    });
+    // this.cookie = await this.getAuthCookie();
+    // this.client = new OpenAI({
+    //   apiKey: 'not-needed',
+    //   baseURL: buildVllmOpenAIBaseURL(
+    //     this.configService.getOrThrow('VAST_BASE_URL', {
+    //       infer: true,
+    //     }),
+    //   ),
+    //   defaultHeaders: {
+    //     Cookie: this.cookie,
+    //   },
+    // });
   }
 
   private async getAuthCookie(): Promise<string> {
-    // const url = this.configService.getOrThrow('VAST_AUTH_URL', {
-    //   infer: true,
-    // });
-    // const response = await fetch(url, {
-    //   redirect: 'manual',
-    // });
-    //
-    // const setCookie = response.headers.get('set-cookie');
-    //
-    // if (!setCookie) {
-    //   throw new Error('Failed to get Vast auth cookie');
-    // }
-    //
-    // return setCookie.split(';')[0];
-    return '';
+    const url = this.configService.getOrThrow('VAST_AUTH_URL', {
+      infer: true,
+    });
+    const response = await fetch(url, {
+      redirect: 'manual',
+    });
+
+    const setCookie = response.headers.get('set-cookie');
+
+    if (!setCookie) {
+      throw new Error('Failed to get Vast auth cookie');
+    }
+
+    return setCookie.split(';')[0];
   }
 
   async chat(message: string) {
