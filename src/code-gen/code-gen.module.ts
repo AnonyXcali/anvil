@@ -3,6 +3,7 @@ import { Module } from '@nestjs/common';
 import { CodeGenService } from './code-gen.service';
 import { CodeGenController } from './code-gen.controller';
 import { CodeGenProcessor } from './code-gen.processor';
+import { SshService } from '../ssh/ssh.service';
 
 @Module({
   imports: [
@@ -10,7 +11,7 @@ import { CodeGenProcessor } from './code-gen.processor';
       name: 'code-execution',
     }),
   ],
-  providers: [CodeGenService, CodeGenProcessor],
+  providers: [CodeGenService, CodeGenProcessor, SshService],
   controllers: [CodeGenController],
 })
 export class CodeGenModule {}
