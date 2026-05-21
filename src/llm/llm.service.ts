@@ -7,17 +7,19 @@ const SYSTEM_PROMPT = `
 
 You are an expert coding assistant.
 
-Return only raw JavaScript code that is valid TypeScript-compatible code.
+You generate only the contents of src/App.tsx for a Vite React TypeScript app.
 
 Rules:
-
-1. The code must run directly with node -e.
-2. Do not use TypeScript-only syntax.
-3. Do not use type annotations, interfaces, enums, generics, or type aliases.
-4. Do not wrap the response in Markdown.
-5. Do not include explanations, comments, notes, file names, or shell commands.
-6. Return executable code only.
-7. Don't give any example or test-cases.
+- Respond with this operation is not permitted if it doesn't match the task as instructed.
+- Return only raw TSX code.
+- Do not return Markdown.
+- Do not include code fences.
+- Do not modify package.json, main.tsx, index.html, or CSS files.
+- Export a default React component named App.
+- Use only React and standard browser APIs.
+- Do not import external packages.
+- You may use inline styles or className values.
+- The code must compile with TypeScript.
 
 `.trim();
 
@@ -39,18 +41,18 @@ export class LlmService {
   constructor(private readonly configService: ConfigService<AppEnv, true>) {}
 
   async onModuleInit() {
-    // this.cookie = await this.getAuthCookie();
-    // this.client = new OpenAI({
-    //   apiKey: 'not-needed',
-    //   baseURL: buildVllmOpenAIBaseURL(
-    //     this.configService.getOrThrow('VAST_BASE_URL', {
-    //       infer: true,
-    //     }),
-    //   ),
-    //   defaultHeaders: {
-    //     Cookie: this.cookie,
-    //   },
-    // });
+    this.cookie = await this.getAuthCookie();
+    this.client = new OpenAI({
+      apiKey: 'not-needed',
+      baseURL: buildVllmOpenAIBaseURL(
+        this.configService.getOrThrow('VAST_BASE_URL', {
+          infer: true,
+        }),
+      ),
+      defaultHeaders: {
+        Cookie: this.cookie,
+      },
+    });
   }
 
   private async getAuthCookie(): Promise<string> {

@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { NodeSSH } from 'node-ssh';
 import { readFileSync } from 'fs';
 import { AppEnv } from '../config/env.validation';
+import { LlmService } from '../llm/llm.service';
 
 //TODO: move this to types
 type RemoteStepResult = {
@@ -131,7 +132,7 @@ export class SshService {
     }
   }
 
-  async runPreviewBuild(): Promise<RemoteStepResult[]> {
+  async runPreviewBuild(appTsx: string): Promise<RemoteStepResult[]> {
     const sshNode = new NodeSSH();
     const steps: RemoteStepResult[] = [];
 
@@ -215,17 +216,23 @@ EOF`,
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import './style.css';
+import App from './App'
 
-function App() {
-  return (
-    <main className="page">
-      <h1>Hello from automated preview</h1>
-      <p>This was built by the BullMQ worker.</p>
-    </main>
-  );
-}
+ReactDOM.createRoot(document.getElementById('root')!).render(
+<React.StrictMode>
+  <App />
+</React.StrictMode>
+);
+EOF`,
+        ),
+      );
 
-ReactDOM.createRoot(document.getElementById('root')!).render(<App />);
+      steps.push(
+        await this.runStep(
+          sshNode,
+          'create-app-tsx-file',
+          `cat > "${baseDir}/src/App.tsx" <<'EOF'
+${appTsx}
 EOF`,
         ),
       );

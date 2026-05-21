@@ -1,6 +1,8 @@
 import { Processor, WorkerHost } from '@nestjs/bullmq';
 import { Job } from 'bullmq';
 import { SshService } from '../ssh/ssh.service';
+import { LlmService } from '../llm/llm.service';
+import { extractCode_v2 } from '../utils';
 
 type TaskJobData = {
   message: string;
@@ -23,7 +25,10 @@ type TaskJobData = {
   concurrency: 1,
 })
 export class CodeGenProcessor extends WorkerHost {
-  constructor(private readonly sshService: SshService) {
+  constructor(
+    private readonly sshService: SshService,
+    private readonly llmService: LlmService,
+  ) {
     super();
   }
 
@@ -31,8 +36,14 @@ export class CodeGenProcessor extends WorkerHost {
     console.log(`Processing job ${job.id}`);
     console.log(`Message: ${job.data.message}`);
     await job.updateProgress(25);
-    // await this.sleep(1000);
-    await this.sshService.runPreviewBuild();
+    const rawCode = await this.llmService.chat(job.data.message);
+
+    if (!rawCode) {
+      throw new Error('Job failed, no code recieved');
+    }
+
+    const extractCode = extractCode_v2(rawCode);
+    await this.sshService.runPreviewBuild(extractCode);
     await job.updateProgress(75);
     const result = job.data.message.toUpperCase();
     await job.updateProgress(100);
