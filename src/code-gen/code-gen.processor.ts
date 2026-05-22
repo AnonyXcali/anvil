@@ -6,13 +6,8 @@ import { extractCode_v2 } from '../utils';
 
 type TaskJobData = {
   message: string;
+  type: string;
 };
-
-/**
- * 1. The worker receives the task.
- * 2. The worker than performs a SSH connection to the remote server
- * 3. The server already has the image in it.
- */
 
 //TODO: see below
 /**
@@ -33,28 +28,75 @@ export class CodeGenProcessor extends WorkerHost {
   }
 
   async process(job: Job<TaskJobData>) {
+    const { type, message } = job.data;
+
     console.log(`Processing job ${job.id}`);
-    console.log(`Message: ${job.data.message}`);
+    console.log(`Message: ${message}`);
+
+    switch (type) {
+      case 'init':
+        return {
+          original: job.data.message,
+          processed: await this.init(job, 'init'),
+          processedAt: new Date().toISOString(),
+        };
+      case 'edit':
+        return {
+          original: job.data.message,
+          processed: await this.update(job, 'edit'),
+          processedAt: new Date().toISOString(),
+        };
+      default:
+        throw new Error('unknown type');
+    }
+  }
+
+  private async init(job: Job<TaskJobData>, type: string) {
     await job.updateProgress(25);
-    const rawCode = await this.llmService.chat(job.data.message);
+
+    const rawCode = await this.llmService.chat(job.data.message, type);
 
     if (!rawCode) {
       throw new Error('Job failed, no code recieved');
     }
 
     const extractCode = extractCode_v2(rawCode);
+
     await this.sshService.runPreviewBuild(extractCode);
+
     await job.updateProgress(75);
     const result = job.data.message.toUpperCase();
     await job.updateProgress(100);
-    return {
-      original: job.data.message,
-      processed: result,
-      processedAt: new Date().toISOString(),
-    };
+    return result;
   }
 
-  private sleep(ms: number) {
-    return new Promise((resolve) => setTimeout(resolve, ms));
+  private async update(job: Job<TaskJobData>, type: string) {
+    await job.updateProgress(25);
+
+    //TODO: should come from backend storage
+    const existingCode = await this.sshService.readFile();
+
+    if (!existingCode) {
+      await this.init(job, 'init');
+      return;
+    }
+
+    const rawCode = await this.llmService.chat(
+      job.data.message,
+      type,
+      existingCode,
+    );
+
+    if (!rawCode) {
+      throw new Error('Job failed, no code recieved');
+    }
+
+    const extractCode = extractCode_v2(rawCode);
+    await this.sshService.updateFile(extractCode);
+
+    await job.updateProgress(75);
+    const result = job.data.message.toUpperCase();
+    await job.updateProgress(100);
+    return result;
   }
 }

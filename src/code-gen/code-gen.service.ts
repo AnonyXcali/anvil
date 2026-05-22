@@ -6,14 +6,15 @@ import { Queue } from 'bullmq';
 export class CodeGenService {
   constructor(
     @InjectQueue('code-execution')
-    private readonly queue: Queue<{ message: string }>,
+    private readonly queue: Queue<{ message: string; type: string }>,
   ) {}
 
-  async enqueue(message: string) {
+  async enqueue(type: string, message: string) {
     const job = await this.queue.add(
       'run-code',
       {
         message,
+        type,
       },
       {
         attempts: 1,

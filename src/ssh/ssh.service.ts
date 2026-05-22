@@ -3,7 +3,6 @@ import { ConfigService } from '@nestjs/config';
 import { NodeSSH } from 'node-ssh';
 import { readFileSync } from 'fs';
 import { AppEnv } from '../config/env.validation';
-import { LlmService } from '../llm/llm.service';
 
 //TODO: move this to types
 type RemoteStepResult = {
@@ -321,15 +320,112 @@ EOF`,
         ),
       );
 
+      //TODO: buggy causes the job to fail
+      // steps.push(
+      //   await this.runStep(
+      //     sshNode,
+      //     'health-check-preview',
+      //     `curl -f http://127.0.0.1:3000`,
+      //   ),
+      // );
+
+      return steps;
+    } finally {
+      sshNode.dispose();
+    }
+  }
+
+  /**
+   *
+   * @param appTsx
+   * Connect to the instance
+   * Update the file
+   * Rebuild the image
+   * Stop the container
+   * Start the new build
+   * Serve
+   */
+
+  async updateFile(appTsx: string) {
+    const sshNode = new NodeSSH();
+    const steps: RemoteStepResult[] = [];
+    const buildId = 'abc123';
+    const baseDir = `/mnt/preview-data/preview-platform/builds/${buildId}`;
+
+    try {
+      //connect to the instance
+      await sshNode.connect({
+        host: process.env.SSH_HOST!,
+        port: Number(process.env.SSH_PORT ?? 22),
+        username: process.env.SSH_USERNAME!,
+        privateKey: readFileSync(process.env.SSH_PRIVATE_KEY_PATH!, 'utf8'),
+      });
+
+      //Update the file
       steps.push(
         await this.runStep(
           sshNode,
-          'health-check-preview',
-          `curl -f http://127.0.0.1:3000`,
+          'create-app-tsx-file',
+          `cat > "${baseDir}/src/App.tsx" <<'EOF'
+${appTsx}
+EOF`,
+        ),
+      );
+
+      //build
+      const imageName = `preview-${buildId}`;
+
+      steps.push(
+        await this.runStep(
+          sshNode,
+          'docker-build-image',
+          `docker build -t "${imageName}" "${baseDir}"`,
+        ),
+      );
+
+      //Stop the container
+      const containerName = `preview-${buildId}`;
+
+      steps.push(
+        await this.runStep(
+          sshNode,
+          'remove-old-container',
+          `docker rm -f "${containerName}" || true`,
+        ),
+      );
+
+      steps.push(
+        await this.runStep(
+          sshNode,
+          'run-preview-container',
+          `docker run -d --name "${containerName}" -p 3000:3000 "${imageName}"`,
         ),
       );
 
       return steps;
+    } finally {
+      sshNode.dispose();
+    }
+  }
+
+  async readFile(): Promise<string> {
+    const sshNode = new NodeSSH();
+    const buildId = 'abc123';
+
+    try {
+      await sshNode.connect({
+        host: process.env.SSH_HOST!,
+        port: Number(process.env.SSH_PORT ?? 22),
+        username: process.env.SSH_USERNAME!,
+        privateKey: readFileSync(process.env.SSH_PRIVATE_KEY_PATH!, 'utf8'),
+      });
+
+      const result = await this.runStep(
+        sshNode,
+        'read-file',
+        `cat ../../mnt/preview-data/preview-platform/builds/${buildId}/src/App.tsx`,
+      );
+      return result.stdout;
     } finally {
       sshNode.dispose();
     }

@@ -23,6 +23,29 @@ Rules:
 
 `.trim();
 
+function generateEditSystemPrompt (appTsx: string): string {
+  return `
+You will be provided the contents of the existing src/App.tsx
+
+===BELOW ARE THE App.tsx CONTENT===
+
+${appTsx}
+
+===ABOVE ARE THE App.tsx CONTENT===
+
+You generate only the contents of src/App.tsx for a Vite React TypeScript app.
+
+Rules:
+- Return only raw TSX code.
+- Do not use Markdown.
+- Do not include code fences.
+- Export a default React component named App.
+- Do not modify other files.
+- Do not import external packages beyond React.
+- The code must compile in a Vite React TypeScript project.
+`.trim();
+}
+
 export function buildVllmOpenAIBaseURL(baseURL: string): string {
   const normalizedBaseURL = baseURL.replace(/\/$/, '');
 
@@ -72,7 +95,7 @@ export class LlmService {
     return setCookie.split(';')[0];
   }
 
-  async chat(message: string) {
+  async chat(message: string, type: string, appTsx?: string) {
     const response = await this.client.chat.completions.create({
       model: this.configService.getOrThrow('VAST_MODEL', {
         infer: true,
@@ -80,7 +103,10 @@ export class LlmService {
       messages: [
         {
           role: 'system',
-          content: SYSTEM_PROMPT,
+          content:
+            type === 'init'
+              ? SYSTEM_PROMPT
+              : generateEditSystemPrompt(appTsx as string),
         },
         { role: 'user', content: message },
       ],

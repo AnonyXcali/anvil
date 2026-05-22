@@ -12,15 +12,15 @@ export class LlmController {
     private readonly sshService: SshService,
   ) {}
 
-  @Post()
-  async chatTest(@Body() body: { message: string }): Promise<string> {
-    const rawCode = await this.llmService.chat(body.message);
-
-    if (!rawCode) throw new Error('No code was returned');
-    const extractedCode = extractCode_v2(rawCode);
-    console.log(extractedCode);
-    return 'Test';
-  }
+  // @Post()
+  // async chatTest(@Body() body: { message: string }): Promise<string> {
+  //   const rawCode = await this.llmService.chat(body.message);
+  //
+  //   if (!rawCode) throw new Error('No code was returned');
+  //   const extractedCode = extractCode_v2(rawCode);
+  //   console.log(extractedCode);
+  //   return 'Test';
+  // }
 
   // @Post()
   // async chat(@Body() body: { message: string }) {
