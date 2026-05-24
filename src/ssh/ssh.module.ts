@@ -1,10 +1,10 @@
 import { Module } from '@nestjs/common';
 import { SshService } from './ssh.service';
 import { SshController } from './ssh.controller';
-import { LlmService } from '../llm/llm.service';
+import { DbService } from '../db/db.service';
 
 @Module({
-  providers: [SshService],
+  providers: [SshService, DbService],
   controllers: [SshController],
   exports: [SshService],
 })

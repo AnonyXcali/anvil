@@ -3,6 +3,14 @@ import { ConfigService } from '@nestjs/config';
 import { NodeSSH } from 'node-ssh';
 import { readFileSync } from 'fs';
 import { AppEnv } from '../config/env.validation';
+import { DbService } from '../db/db.service';
+
+// type ProjectFileRow = {
+//   id: string;
+//   project_id: string;
+//   path: string;
+//   content: string;
+// };
 
 //TODO: move this to types
 type RemoteStepResult = {
@@ -20,7 +28,10 @@ type RemoteStepResult = {
 
 @Injectable()
 export class SshService {
-  constructor(private readonly configService: ConfigService<AppEnv, true>) {}
+  constructor(
+    private readonly configService: ConfigService<AppEnv, true>,
+    private readonly dbService: DbService,
+  ) {}
 
   async sshConnect() {
     const ssh = new NodeSSH();
@@ -131,23 +142,15 @@ export class SshService {
     }
   }
 
-  async runPreviewBuild(appTsx: string): Promise<RemoteStepResult[]> {
+  async runPreviewBuild(
+    appTsx: string,
+    buildId: string,
+    imageName: string,
+    containerName: string,
+  ): Promise<RemoteStepResult[]> {
     const sshNode = new NodeSSH();
     const steps: RemoteStepResult[] = [];
-
-    //need to store the run in database
-
-    //need to dynamically generate uuid for each build
-    const buildId = 'abc123';
-
-    //pass build id here
     const baseDir = `/mnt/preview-data/preview-platform/builds/${buildId}`;
-
-    //pass build id here
-    const imageName = `preview-${buildId}`;
-
-    //pass build id here
-    const containerName = `preview-${buildId}`;
 
     try {
       await sshNode.connect({
@@ -304,6 +307,7 @@ EOF`,
         ),
       );
 
+      //TODO: fix it this breaks
       steps.push(
         await this.runStep(
           sshNode,

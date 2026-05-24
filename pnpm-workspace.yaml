@@ -1,0 +1,9 @@
+packages:
+  - '.'
+
+allowBuilds:
+  '@nestjs/core': true
+  cpu-features: true
+  msgpackr-extract: true
+  ssh2: true
+  unrs-resolver: true

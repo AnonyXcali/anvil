@@ -1,0 +1,61 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: preview-api
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      OPENAI_MODEL: gpt-4o-mini
+      VAST_BASE_URL: ${VAST_BASE_URL}
+      VAST_AUTH_URL: ${VAST_AUTH_URL}
+      VAST_MODEL: ${VAST_MODEL}
+
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+
+      DATABASE_URL: postgresql://preview_user:preview_password@postgres:5432/preview_platform
+
+      SSH_HOST: ${SSH_HOST}
+      SSH_PORT: ${SSH_PORT}
+      SSH_USERNAME: ${SSH_USERNAME}
+      SSH_PRIVATE_KEY_PATH: /run/secrets/azure_preview_vm_key
+    secrets:
+      - azure_preview_vm_key
+    depends_on:
+      - redis
+      - postgres
+
+  redis:
+    image: redis:7-alpine
+    container_name: preview-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+
+  postgres:
+    image: postgres:17-alpine
+    container_name: preview-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: preview_user
+      POSTGRES_PASSWORD: preview_password
+      POSTGRES_DB: preview_platform
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./migrations:/docker-entrypoint-initdb.d
+
+secrets:
+  azure_preview_vm_key:
+    file: ${SSH_PRIVATE_KEY_PATH}
+
+volumes:
+  postgres_data:

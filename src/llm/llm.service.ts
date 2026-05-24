@@ -1,8 +1,9 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { OpenAI } from 'openai';
 import { AppEnv } from '../config/env.validation';
 
+//TODO: this would evolve with rest of the scaffolding
 const SYSTEM_PROMPT = `
 
 You are an expert coding assistant.
@@ -23,7 +24,7 @@ Rules:
 
 `.trim();
 
-function generateEditSystemPrompt (appTsx: string): string {
+function generateEditSystemPrompt(appTsx: string): string {
   return `
 You will be provided the contents of the existing src/App.tsx
 
@@ -57,7 +58,7 @@ export function buildVllmOpenAIBaseURL(baseURL: string): string {
 }
 
 @Injectable()
-export class LlmService {
+export class LlmService implements OnModuleInit {
   private client: OpenAI;
   private cookie: string;
 

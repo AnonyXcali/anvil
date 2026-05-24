@@ -5,6 +5,7 @@ import { CodeGenController } from './code-gen.controller';
 import { CodeGenProcessor } from './code-gen.processor';
 import { SshService } from '../ssh/ssh.service';
 import { LlmService } from '../llm/llm.service';
+import { DbService } from '../db/db.service';
 
 /**
  * POST /projects/:projectId/messages
@@ -30,7 +31,13 @@ import { LlmService } from '../llm/llm.service';
       name: 'code-execution',
     }),
   ],
-  providers: [CodeGenService, CodeGenProcessor, SshService, LlmService],
+  providers: [
+    CodeGenService,
+    CodeGenProcessor,
+    SshService,
+    LlmService,
+    DbService,
+  ],
   controllers: [CodeGenController],
 })
 export class CodeGenModule {}
