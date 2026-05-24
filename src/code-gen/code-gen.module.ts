@@ -3,9 +3,11 @@ import { Module } from '@nestjs/common';
 import { CodeGenService } from './code-gen.service';
 import { CodeGenController } from './code-gen.controller';
 import { CodeGenProcessor } from './code-gen.processor';
-import { SshService } from '../ssh/ssh.service';
-import { LlmService } from '../llm/llm.service';
-import { DbService } from '../db/db.service';
+import { SshModule } from '../ssh/ssh.module';
+import { LlmModule } from '../llm/llm.module';
+import { DbModule } from '../db/db.module';
+import { PortService } from '../ssh/port.service';
+import { PortModule } from '../ssh/port.module';
 
 /**
  * POST /projects/:projectId/messages
@@ -27,17 +29,15 @@ import { DbService } from '../db/db.service';
 
 @Module({
   imports: [
+    PortModule,
+    SshModule,
+    LlmModule,
+    DbModule,
     BullModule.registerQueue({
       name: 'code-execution',
     }),
   ],
-  providers: [
-    CodeGenService,
-    CodeGenProcessor,
-    SshService,
-    LlmService,
-    DbService,
-  ],
+  providers: [CodeGenService, CodeGenProcessor],
   controllers: [CodeGenController],
 })
 export class CodeGenModule {}

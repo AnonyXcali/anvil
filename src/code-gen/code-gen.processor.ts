@@ -10,6 +10,7 @@ type TaskJobData = {
   type: string;
   projectId: string;
   buildId: string;
+  port: number;
 };
 
 //TODO: see below
@@ -52,7 +53,7 @@ export class CodeGenProcessor extends WorkerHost {
       case 'init':
         return {
           original: job.data.message,
-          processed: await this.init(job, projectId, buildId),
+          processed: await this.init(job),
           processedAt: new Date().toISOString(),
         };
       case 'edit':
@@ -66,18 +67,14 @@ export class CodeGenProcessor extends WorkerHost {
     }
   }
 
-  private async init(
-    job: Job<TaskJobData>,
-    projectId: string,
-    buildId: string,
-  ) {
+  private async init(job: Job<TaskJobData>) {
     await job.updateProgress(25);
 
     const dbResponse = await this.dbService.query<{ content: string }>(
       `
     SELECT content FROM preview_platform.project_file WHERE project_id = $1;
     `,
-      [projectId],
+      [job.data.projectId],
     );
 
     const rawCode = dbResponse.rows[0].content;
@@ -93,7 +90,7 @@ export class CodeGenProcessor extends WorkerHost {
                 updated_at = now()
             WHERE id = $3;
   `,
-        ['TBA', [], buildId],
+        ['TBA', [], job.data.buildId],
       );
       throw new Error('Job failed, no code received');
     }
@@ -102,9 +99,10 @@ export class CodeGenProcessor extends WorkerHost {
 
     const runLogs = await this.sshService.runPreviewBuild(
       extractCode,
-      buildId,
-      `preview-${buildId}`,
-      `preview-${buildId}`,
+      job.data.buildId,
+      `preview-${job.data.buildId}`,
+      `preview-${job.data.buildId}`,
+      job.data.port,
     );
 
     await job.updateProgress(75);
@@ -124,7 +122,14 @@ export class CodeGenProcessor extends WorkerHost {
               updated_at = now()
           WHERE id = $4;
   `,
-      ['http://51.107.11.148:3000/', `preview-${buildId}`, result, buildId],
+      // TODO(security): Do not expose previews through direct unauthenticated HTTP URLs.
+      // Route them through an authenticated HTTPS proxy or enforce network allowlists.
+      [
+        `http://${process.env.SSH_HOST}:${job.data.port}/`,
+        `preview-${job.data.buildId}`,
+        result,
+        job.data.buildId,
+      ],
     );
     return result;
   }
@@ -141,7 +146,7 @@ export class CodeGenProcessor extends WorkerHost {
     );
 
     if (!existingCode) {
-      await this.init(job, 'init', job.data.projectId);
+      await this.init(job);
       return;
     }
 

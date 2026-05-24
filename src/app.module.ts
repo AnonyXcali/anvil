@@ -15,6 +15,7 @@ import { DbModule } from './db/db.module';
       connection: {
         host: process.env.REDIS_HOST ?? '127.0.0.1',
         port: Number(process.env.REDIS_PORT ?? 6379),
+        db: 0,
       },
     }),
     ConfigModule.forRoot({

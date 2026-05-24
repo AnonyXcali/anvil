@@ -1,6 +1,7 @@
 import { Injectable, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { Pool, QueryResult, QueryResultRow } from 'pg';
 
+//TODO: need to go through entire DB flows and fix it
 @Injectable()
 export class DbService implements OnModuleInit, OnModuleDestroy {
   private pool!: Pool;

@@ -1,17 +1,8 @@
-import { Controller, Post, Body, Get } from '@nestjs/common';
-import { extractCode, extractCode_v2 } from 'src/utils';
-import { LlmService } from './llm.service';
-import { SshService } from 'src/ssh/ssh.service';
-import { raw } from 'express';
+import { Controller } from '@nestjs/common';
 
 //harness engineering: https://www.youtube.com/watch?v=C_GG5g38vLU
 @Controller('llm')
 export class LlmController {
-  constructor(
-    private readonly llmService: LlmService,
-    private readonly sshService: SshService,
-  ) {}
-
   // @Post()
   // async chatTest(@Body() body: { message: string }): Promise<string> {
   //   const rawCode = await this.llmService.chat(body.message);

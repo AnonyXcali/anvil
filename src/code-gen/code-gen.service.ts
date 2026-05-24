@@ -3,6 +3,7 @@ import { Injectable } from '@nestjs/common';
 import { Queue } from 'bullmq';
 import { DbService } from '../db/db.service';
 import { LlmService } from '../llm/llm.service';
+import { PortService } from '../ssh/port.service';
 
 /**
  * Controller
@@ -32,14 +33,15 @@ export class CodeGenService {
       type: string;
       projectId: string;
       buildId: string;
+      port: number;
     }>,
     private readonly dbService: DbService,
     private readonly llmService: LlmService,
+    private readonly portService: PortService,
   ) {}
 
   async enqueue(type: string, message: string, projectName: string) {
     //call db service here to create a project
-    //TODO: name will be user input
     const db = await this.dbService.query<{ id: string }>(
       `
         INSERT INTO preview_platform.project(name, status)
@@ -71,6 +73,9 @@ export class CodeGenService {
       [db.rows[0].id, 'queued', new Date()],
     );
 
+    //acquire port
+    const port = await this.portService.acquirePort();
+
     //add to the queue
     const job = await this.queue.add(
       'run-code',
@@ -79,6 +84,7 @@ export class CodeGenService {
         type,
         projectId: db.rows[0].id,
         buildId: buildRow.rows[0].id,
+        port,
       },
       {
         attempts: 1,

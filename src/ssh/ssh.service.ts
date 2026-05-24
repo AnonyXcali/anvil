@@ -4,6 +4,7 @@ import { NodeSSH } from 'node-ssh';
 import { readFileSync } from 'fs';
 import { AppEnv } from '../config/env.validation';
 import { DbService } from '../db/db.service';
+import { PortService } from './port.service';
 
 // type ProjectFileRow = {
 //   id: string;
@@ -30,7 +31,7 @@ type RemoteStepResult = {
 export class SshService {
   constructor(
     private readonly configService: ConfigService<AppEnv, true>,
-    private readonly dbService: DbService,
+    private readonly portService: PortService,
   ) {}
 
   async sshConnect() {
@@ -147,6 +148,7 @@ export class SshService {
     buildId: string,
     imageName: string,
     containerName: string,
+    port: number,
   ): Promise<RemoteStepResult[]> {
     const sshNode = new NodeSSH();
     const steps: RemoteStepResult[] = [];
@@ -307,7 +309,6 @@ EOF`,
         ),
       );
 
-      //TODO: fix it this breaks
       steps.push(
         await this.runStep(
           sshNode,
@@ -320,7 +321,9 @@ EOF`,
         await this.runStep(
           sshNode,
           'run-preview-container',
-          `docker run -d --name "${containerName}" -p 3000:3000 "${imageName}"`,
+          // TODO(security): Avoid binding preview containers on all public interfaces.
+          // Bind to localhost/internal networking and expose them only through an auth/TLS proxy.
+          `docker run -d --name "${containerName}" -p ${port}:3000 "${imageName}"`,
         ),
       );
 
@@ -398,6 +401,8 @@ EOF`,
         ),
       );
 
+      // TODO(security): Store and reuse the build's allocated port for edits instead of hardcoding
+      // 3000, which can collide with other previews or expose the wrong container publicly.
       steps.push(
         await this.runStep(
           sshNode,
