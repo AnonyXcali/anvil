@@ -23,6 +23,7 @@ terraform.tfstate.*
 # logs/runtime
 logs/
 *.log
+dev-logs/
 
 # generated/build
 dist/
