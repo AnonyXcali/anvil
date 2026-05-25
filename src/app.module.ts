@@ -9,6 +9,21 @@ import { CodeGenModule } from './code-gen/code-gen.module';
 import { BullModule } from '@nestjs/bullmq';
 import { DbModule } from './db/db.module';
 
+/**
+ * Fix update flow
+ * Need to work on the code loop generation.
+ * Multi folder generation.
+ * A user can:
+ * 1. Create a project from a prompt.
+ * 2. Receive projectId/buildId/jobId.
+ * 3. Poll build status.
+ * 4. Open dynamic preview URL.
+ * 5. Send edit request using projectId.
+ * 6. System loads App.tsx from DB.
+ * 7. LLM updates App.tsx.
+ * 8. System rebuilds preview on dynamic port.
+ * 9. Build logs/status/preview URL are stored in DB.
+ **/
 @Module({
   imports: [
     BullModule.forRoot({
