@@ -15,15 +15,18 @@ export class CodeGenController {
   @Post()
   @HttpCode(202)
   async generate(
-    @Body() body: { type: string; message: string; project_name: string },
+    @Body() body: { message: string; project_name: string },
   ): Promise<{
     jobId: string | undefined;
     status: string;
   }> {
-    return await this.codeGenService.enqueue(
-      body.type,
-      body.message,
-      body.project_name,
-    );
+    return await this.codeGenService.enqueue(body.message, body.project_name);
+  }
+
+  //pass the project
+  @Post('edit')
+  @HttpCode(202)
+  async edit(@Body() body: { project_id: string; message: string }) {
+    return this.codeGenService.editEnqueue(body.project_id, body.message);
   }
 }

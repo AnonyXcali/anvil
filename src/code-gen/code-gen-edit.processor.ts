@@ -7,6 +7,7 @@ import { DbService } from '../db/db.service';
 
 type TaskJobData = {
   message: string;
+  type: string;
   projectId: string;
   buildId: string;
   port: number;
@@ -18,11 +19,10 @@ type TaskJobData = {
  *   -> only expose 80/443
  *   -> route preview domains to containers
  */
-
-@Processor('code-execution', {
+@Processor('edit-code-execution', {
   concurrency: 1,
 })
-export class CodeGenProcessor extends WorkerHost {
+export class CodeGenEditProcessor extends WorkerHost {
   constructor(
     private readonly sshService: SshService,
     private readonly llmService: LlmService,
@@ -32,10 +32,10 @@ export class CodeGenProcessor extends WorkerHost {
   }
 
   async process(job: Job<TaskJobData>) {
-    const { message, buildId } = job.data;
+    await job.updateProgress(25);
 
-    console.log(`Processing job ${job.id}`);
-    console.log(`Message: ${message}`);
+    console.log(`Processing Edit job ${job.id}`);
+    console.log(`Message: ${job.data.message}`);
 
     await this.dbService.query(
       `
@@ -45,60 +45,64 @@ export class CodeGenProcessor extends WorkerHost {
           status = 'building'
       WHERE id = $2
   `,
-      [String(job.id), buildId],
+      [String(job.id), job.data.buildId],
     );
 
-    return {
-      original: job.data.message,
-      processed: await this.init(job),
-      processedAt: new Date().toISOString(),
-    };
-  }
+    const { port, buildId } = job.data || {};
 
-  private async init(job: Job<TaskJobData>) {
-    await job.updateProgress(25);
+    //get existing code
+    const existingCode = await this.dbService.query<{ content: string }>(
+      `
+    SELECT content FROM preview_platform.project_file WHERE project_id = $1
+    `,
+      [job.data.projectId],
+    );
 
-    //generate code
-    const rawCode = await this.llmService.chat(job.data.message);
-
-    if (!rawCode) {
-      await this.dbService.query(
-        `
-            UPDATE preview_platform.project_build
-            SET status = 'failed',
-                error = $1,
-                logs = $2,
-                completed_at = now(),
-                updated_at = now()
-            WHERE id = $3;
-  `,
-        ['TBA', [], job.data.buildId],
-      );
-      throw new Error('Job failed, no code received');
+    if (!existingCode) {
+      //TODO: should emit event for a init phase.
+      throw new Error('No existing code exists');
     }
 
-    //store code
-    await this.dbService.query<{ content: string }>(
-      `
-      INSERT INTO preview_platform.project_file(project_id, path, content)
-      VALUES ($1, $2, $3)
-      RETURNING content;
-    `,
-      [job.data.projectId, 'src/App.tsx', rawCode],
+    const rawCode = await this.llmService.generateNewEdit(
+      job.data.message,
+      existingCode.rows[0].content,
     );
 
-    const extractCode = extractCode_v2(rawCode);
+    if (!rawCode) {
+      throw new Error('Job failed, no code recieved');
+    }
 
-    const runLogs = await this.sshService.runPreviewBuild(
+    //update existing row where project_id exists
+    await this.dbService.query<{ content: string }>(
+      `
+      UPDATE preview_platform.project_file
+      SET content = $1
+      WHERE project_id = $2
+      RETURNING content;
+    `,
+      [rawCode, job.data.projectId],
+    );
+
+    /**
+     * buildId: string,
+     imageName: string,
+     containerName: string,
+     port: number,
+     */
+    const imageName = `preview-${job.data.projectId}-${job.data.buildId}`;
+    const containerName = `preview-${job.data.projectId}`;
+
+    const extractCode = extractCode_v2(rawCode);
+    const logs = await this.sshService.updateFile(
       extractCode,
-      job.data.buildId, //buildId
-      `preview-${job.data.projectId}-${job.data.buildId}`, //image_name
-      `preview-${job.data.projectId}`, //container_name
-      job.data.port,
+      buildId,
+      imageName,
+      containerName,
+      port,
     );
 
     await job.updateProgress(75);
-    const result = JSON.stringify(runLogs);
+    const result = JSON.stringify(logs);
     await job.updateProgress(100);
 
     //success
@@ -124,6 +128,7 @@ export class CodeGenProcessor extends WorkerHost {
         job.data.buildId,
       ],
     );
+
     return result;
   }
 }

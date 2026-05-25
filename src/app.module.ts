@@ -10,7 +10,7 @@ import { BullModule } from '@nestjs/bullmq';
 import { DbModule } from './db/db.module';
 
 /**
- * Fix update flow
+ * Fix update flow [DONE]
  * Need to work on the code loop generation.
  * Multi folder generation.
  * A user can:

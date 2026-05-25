@@ -3,7 +3,6 @@ import { ConfigService } from '@nestjs/config';
 import { NodeSSH } from 'node-ssh';
 import { readFileSync } from 'fs';
 import { AppEnv } from '../config/env.validation';
-import { DbService } from '../db/db.service';
 import { PortService } from './port.service';
 
 // type ProjectFileRow = {
@@ -57,6 +56,7 @@ export class SshService {
       });
       console.log('Connected!');
     } catch (e: unknown) {
+      //TODO: FIX THIS FAILS INSIDE THE WORKER
       console.error('SSH command failed:', e);
       throw e;
     } finally {
@@ -143,131 +143,20 @@ export class SshService {
     }
   }
 
-  async runPreviewBuild(
-    appTsx: string,
-    buildId: string,
+  async dockerBuild(
+    sshNode: NodeSSH,
+    baseDir: string,
     imageName: string,
     containerName: string,
     port: number,
-  ): Promise<RemoteStepResult[]> {
-    const sshNode = new NodeSSH();
+  ) {
     const steps: RemoteStepResult[] = [];
-    const baseDir = `/mnt/preview-data/preview-platform/builds/${buildId}`;
 
-    try {
-      await sshNode.connect({
-        host: process.env.SSH_HOST!,
-        port: Number(process.env.SSH_PORT ?? 22),
-        username: process.env.SSH_USERNAME!,
-        privateKey: readFileSync(process.env.SSH_PRIVATE_KEY_PATH!, 'utf8'),
-      });
-
-      steps.push(
-        await this.runStep(
-          sshNode,
-          'delete-old-create-new-folder',
-          `rm -rf "${baseDir}" && mkdir -p "${baseDir}/src"`,
-        ),
-      );
-
-      steps.push(
-        await this.runStep(
-          sshNode,
-          'create-package-json-file',
-          `cat > "${baseDir}/package.json" <<'EOF'
-{
-  "scripts": {
-    "build": "vite build"
-  },
-  "dependencies": {
-    "@vitejs/plugin-react": "latest",
-    "vite": "latest",
-    "typescript": "latest",
-    "react": "latest",
-    "react-dom": "latest",
-    "serve": "latest"
-  },
-  "devDependencies": {}
-}
-EOF`,
-        ),
-      );
-
-      steps.push(
-        await this.runStep(
-          sshNode,
-          'create-index-html-file',
-          `cat > "${baseDir}/index.html" <<'EOF'
-<!doctype html>
-<html>
-  <head>
-    <title>React Preview</title>
-  </head>
-  <body>
-    <div id="root"></div>
-    <script type="module" src="/src/main.tsx"></script>
-  </body>
-</html>
-EOF`,
-        ),
-      );
-
-      steps.push(
-        await this.runStep(
-          sshNode,
-          'create-main-tsx-file',
-          `cat > "${baseDir}/src/main.tsx" <<'EOF'
-import React from 'react';
-import ReactDOM from 'react-dom/client';
-import './style.css';
-import App from './App'
-
-ReactDOM.createRoot(document.getElementById('root')!).render(
-<React.StrictMode>
-  <App />
-</React.StrictMode>
-);
-EOF`,
-        ),
-      );
-
-      steps.push(
-        await this.runStep(
-          sshNode,
-          'create-app-tsx-file',
-          `cat > "${baseDir}/src/App.tsx" <<'EOF'
-${appTsx}
-EOF`,
-        ),
-      );
-
-      steps.push(
-        await this.runStep(
-          sshNode,
-          'create-css-file',
-          `cat > "${baseDir}/src/style.css" <<'EOF'
-body {
-  margin: 0;
-  font-family: system-ui, sans-serif;
-  background: #111827;
-  color: white;
-}
-
-.page {
-  min-height: 100vh;
-  display: grid;
-  place-content: center;
-  text-align: center;
-}
-EOF`,
-        ),
-      );
-
-      steps.push(
-        await this.runStep(
-          sshNode,
-          'create-dockerfile',
-          `cat > "${baseDir}/Dockerfile" <<'EOF'
+    steps.push(
+      await this.runStep(
+        sshNode,
+        'create-dockerfile',
+        `cat > "${baseDir}/Dockerfile" <<'EOF'
 FROM node:20-alpine AS builder
 
 WORKDIR /app
@@ -290,41 +179,182 @@ EXPOSE 3000
 
 CMD ["serve", "-s", "dist", "-l", "3000"]
 EOF`,
-        ),
-      );
+      ),
+    );
+
+    steps.push(
+      await this.runStep(
+        sshNode,
+        'verify-files',
+        `ls -la "${baseDir}" && ls -la "${baseDir}/src" && test -f "${baseDir}/Dockerfile" && test -f "${baseDir}/package.json"`,
+      ),
+    );
+
+    steps.push(
+      await this.runStep(
+        sshNode,
+        'docker-build-image',
+        `docker build -t "${imageName}" "${baseDir}"`,
+      ),
+    );
+
+    steps.push(
+      await this.runStep(
+        sshNode,
+        'remove-old-container',
+        `docker rm -f "${containerName}" || true`,
+      ),
+    );
+
+    steps.push(
+      await this.runStep(
+        sshNode,
+        'run-preview-container',
+        // TODO(security): Avoid binding preview containers on all public interfaces.
+        // Bind to localhost/internal networking and expose them only through an auth/TLS proxy.
+        `docker run -d --name "${containerName}" -p ${port}:3000 "${imageName}"`,
+      ),
+    );
+
+    return steps;
+  }
+
+  async scaffolding(sshNode: NodeSSH, baseDir: string) {
+    const steps: RemoteStepResult[] = [];
+
+    steps.push(
+      await this.runStep(
+        sshNode,
+        'delete-old-create-new-folder',
+        `rm -rf "${baseDir}" && mkdir -p "${baseDir}/src"`,
+      ),
+    );
+
+    steps.push(
+      await this.runStep(
+        sshNode,
+        'create-package-json-file',
+        `cat > "${baseDir}/package.json" <<'EOF'
+{
+"scripts": {
+  "build": "vite build"
+},
+"dependencies": {
+  "@vitejs/plugin-react": "latest",
+  "vite": "latest",
+  "typescript": "latest",
+  "react": "latest",
+  "react-dom": "latest",
+  "serve": "latest"
+},
+"devDependencies": {}
+}
+EOF`,
+      ),
+    );
+
+    steps.push(
+      await this.runStep(
+        sshNode,
+        'create-index-html-file',
+        `cat > "${baseDir}/index.html" <<'EOF'
+<!doctype html>
+<html>
+<head>
+  <title>React Preview</title>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="module" src="/src/main.tsx"></script>
+</body>
+</html>
+EOF`,
+      ),
+    );
+
+    steps.push(
+      await this.runStep(
+        sshNode,
+        'create-main-tsx-file',
+        `cat > "${baseDir}/src/main.tsx" <<'EOF'
+import React from 'react';
+import ReactDOM from 'react-dom/client';
+import './style.css';
+import App from './App'
+
+ReactDOM.createRoot(document.getElementById('root')!).render(
+<React.StrictMode>
+<App />
+</React.StrictMode>
+);
+EOF`,
+      ),
+    );
+
+    steps.push(
+      await this.runStep(
+        sshNode,
+        'create-css-file',
+        `cat > "${baseDir}/src/style.css" <<'EOF'
+body {
+margin: 0;
+font-family: system-ui, sans-serif;
+background: #111827;
+color: white;
+}
+
+.page {
+min-height: 100vh;
+display: grid;
+place-content: center;
+text-align: center;
+}
+EOF`,
+      ),
+    );
+
+    return steps;
+  }
+
+  async runPreviewBuild(
+    appTsx: string,
+    buildId: string,
+    imageName: string,
+    containerName: string,
+    port: number,
+  ): Promise<RemoteStepResult[]> {
+    const sshNode = new NodeSSH();
+    const steps: RemoteStepResult[] = [];
+    const baseDir = `/mnt/preview-data/preview-platform/builds/${buildId}`;
+
+    try {
+      await sshNode.connect({
+        host: process.env.SSH_HOST!,
+        port: Number(process.env.SSH_PORT ?? 22),
+        username: process.env.SSH_USERNAME!,
+        privateKey: readFileSync(process.env.SSH_PRIVATE_KEY_PATH!, 'utf8'),
+      });
+
+      steps.push(...(await this.scaffolding(sshNode, baseDir)));
 
       steps.push(
         await this.runStep(
           sshNode,
-          'verify-files',
-          `ls -la "${baseDir}" && ls -la "${baseDir}/src" && test -f "${baseDir}/Dockerfile" && test -f "${baseDir}/package.json"`,
+          'create-app-tsx-file',
+          `cat > "${baseDir}/src/App.tsx" <<'EOF'
+${appTsx}
+EOF`,
         ),
       );
 
       steps.push(
-        await this.runStep(
+        ...(await this.dockerBuild(
           sshNode,
-          'docker-build-image',
-          `docker build -t "${imageName}" "${baseDir}"`,
-        ),
-      );
-
-      steps.push(
-        await this.runStep(
-          sshNode,
-          'remove-old-container',
-          `docker rm -f "${containerName}" || true`,
-        ),
-      );
-
-      steps.push(
-        await this.runStep(
-          sshNode,
-          'run-preview-container',
-          // TODO(security): Avoid binding preview containers on all public interfaces.
-          // Bind to localhost/internal networking and expose them only through an auth/TLS proxy.
-          `docker run -d --name "${containerName}" -p ${port}:3000 "${imageName}"`,
-        ),
+          baseDir,
+          imageName,
+          containerName,
+          port,
+        )),
       );
 
       //TODO: buggy causes the job to fail
@@ -353,10 +383,15 @@ EOF`,
    * Serve
    */
 
-  async updateFile(appTsx: string) {
+  async updateFile(
+    appTsx: string,
+    buildId: string,
+    imageName: string,
+    containerName: string,
+    port: number,
+  ) {
     const sshNode = new NodeSSH();
     const steps: RemoteStepResult[] = [];
-    const buildId = 'abc123';
     const baseDir = `/mnt/preview-data/preview-platform/builds/${buildId}`;
 
     try {
@@ -368,7 +403,10 @@ EOF`,
         privateKey: readFileSync(process.env.SSH_PRIVATE_KEY_PATH!, 'utf8'),
       });
 
-      //Update the file
+      //scaffolding
+      steps.push(...(await this.scaffolding(sshNode, baseDir)));
+
+      //add the new file
       steps.push(
         await this.runStep(
           sshNode,
@@ -380,35 +418,14 @@ EOF`,
       );
 
       //build
-      const imageName = `preview-${buildId}`;
-
       steps.push(
-        await this.runStep(
+        ...(await this.dockerBuild(
           sshNode,
-          'docker-build-image',
-          `docker build -t "${imageName}" "${baseDir}"`,
-        ),
-      );
-
-      //Stop the container
-      const containerName = `preview-${buildId}`;
-
-      steps.push(
-        await this.runStep(
-          sshNode,
-          'remove-old-container',
-          `docker rm -f "${containerName}" || true`,
-        ),
-      );
-
-      // TODO(security): Store and reuse the build's allocated port for edits instead of hardcoding
-      // 3000, which can collide with other previews or expose the wrong container publicly.
-      steps.push(
-        await this.runStep(
-          sshNode,
-          'run-preview-container',
-          `docker run -d --name "${containerName}" -p 3000:3000 "${imageName}"`,
-        ),
+          baseDir,
+          imageName,
+          containerName,
+          port,
+        )),
       );
 
       return steps;

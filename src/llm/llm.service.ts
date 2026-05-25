@@ -8,7 +8,8 @@ const SYSTEM_PROMPT = `
 
 You are an expert coding assistant.
 
-You generate only the contents of src/App.tsx for a Vite React TypeScript app.
+You generate only the contents of src/App.tsx for a Vite React TypeScript app,
+based on the user's description.
 
 Rules:
 - Respond with this operation is not permitted if it doesn't match the task as instructed.
@@ -96,7 +97,7 @@ export class LlmService implements OnModuleInit {
     return setCookie.split(';')[0];
   }
 
-  async chat(message: string, type: string, appTsx?: string) {
+  async chat(message: string) {
     const response = await this.client.chat.completions.create({
       model: this.configService.getOrThrow('VAST_MODEL', {
         infer: true,
@@ -104,10 +105,23 @@ export class LlmService implements OnModuleInit {
       messages: [
         {
           role: 'system',
-          content:
-            type === 'init'
-              ? SYSTEM_PROMPT
-              : generateEditSystemPrompt(appTsx as string),
+          content: SYSTEM_PROMPT,
+        },
+        { role: 'user', content: message },
+      ],
+    });
+    return response.choices[0]?.message.content ?? null;
+  }
+
+  async generateNewEdit(message: string, appTsx?: string) {
+    const response = await this.client.chat.completions.create({
+      model: this.configService.getOrThrow('VAST_MODEL', {
+        infer: true,
+      }),
+      messages: [
+        {
+          role: 'system',
+          content: generateEditSystemPrompt(appTsx as string),
         },
         { role: 'user', content: message },
       ],

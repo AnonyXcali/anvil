@@ -6,6 +6,7 @@ CREATE TABLE IF NOT EXISTS preview_platform.project (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     name TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'active',
+    active_port INTEGER,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -35,6 +36,7 @@ CREATE TABLE IF NOT EXISTS preview_platform.project_build (
 
       job_id TEXT,
       status TEXT NOT NULL DEFAULT 'queued',
+      host_port INTEGER NOT NULL,
 
       preview_url TEXT,
       container_name TEXT,

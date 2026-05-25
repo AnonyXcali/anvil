@@ -2,7 +2,6 @@ import { InjectQueue } from '@nestjs/bullmq';
 import { Injectable } from '@nestjs/common';
 import { Queue } from 'bullmq';
 import { DbService } from '../db/db.service';
-import { LlmService } from '../llm/llm.service';
 import { PortService } from '../ssh/port.service';
 
 /**
@@ -30,58 +29,50 @@ export class CodeGenService {
     @InjectQueue('code-execution')
     private readonly queue: Queue<{
       message: string;
-      type: string;
       projectId: string;
       buildId: string;
       port: number;
     }>,
+    @InjectQueue('edit-code-execution')
+    private readonly editQueue: Queue<{
+      port: number;
+      buildId: string;
+      projectId: string;
+      message: string;
+    }>,
     private readonly dbService: DbService,
-    private readonly llmService: LlmService,
     private readonly portService: PortService,
   ) {}
 
-  async enqueue(type: string, message: string, projectName: string) {
+  async enqueue(message: string, projectName: string) {
+    //acquire port
+    const port = await this.portService.acquirePort();
+
     //call db service here to create a project
     const db = await this.dbService.query<{ id: string }>(
       `
-        INSERT INTO preview_platform.project(name, status)
-        VALUES ($1, 'active')
+        INSERT INTO preview_platform.project(name, status, active_port)
+        VALUES ($1, 'active', $2)
         RETURNING id;
     `,
-      [projectName],
-    );
-    //generate app.tsx file here
-    const rawCode = await this.llmService.chat(message, type);
-
-    //store the generated App.tsx in the db
-    await this.dbService.query<{ content: string }>(
-      `
-      INSERT INTO preview_platform.project_file(project_id, path, content)
-      VALUES ($1, $2, $3)
-      RETURNING content;
-    `,
-      [db.rows[0].id, 'src/App.tsx', rawCode],
+      [projectName, port],
     );
 
     //DB: build row create
     const buildRow = await this.dbService.query<{ id: string }>(
       `
-      INSERT INTO preview_platform.project_build(project_id, status, started_at)
-      VALUES ($1, $2, $3)
+      INSERT INTO preview_platform.project_build(project_id, status, host_port, started_at)
+      VALUES ($1, $2, $3, $4)
       RETURNING id;
     `,
-      [db.rows[0].id, 'queued', new Date()],
+      [db.rows[0].id, 'queued', port, new Date()],
     );
-
-    //acquire port
-    const port = await this.portService.acquirePort();
 
     //add to the queue
     const job = await this.queue.add(
       'run-code',
       {
         message,
-        type,
         projectId: db.rows[0].id,
         buildId: buildRow.rows[0].id,
         port,
@@ -103,6 +94,62 @@ export class CodeGenService {
       jobId: job.id,
       status: 'queued',
     };
+  }
+
+  async editEnqueue(projectId: string, message: string) {
+    //pre worker tasks
+    //get the port
+    const port = await this.dbService.query<{ active_port: number }>(
+      `
+      SELECT active_port
+      FROM preview_platform.project
+      WHERE id = $1
+      `,
+      [projectId],
+    );
+
+    const activePort = port.rows[0]?.active_port;
+
+    if (!activePort) {
+      throw new Error(`Project ${projectId} does not have an active port`);
+    }
+
+    //DB: build row create
+    const buildRow = await this.dbService.query<{ id: string }>(
+      `
+      INSERT INTO preview_platform.project_build(project_id, status, host_port, started_at)
+      VALUES ($1, $2, $3, $4)
+      RETURNING id;
+    `,
+      [projectId, 'queued', activePort, new Date()],
+    );
+
+    const job = await this.editQueue.add(
+      'run-code',
+      {
+        port: port.rows[0].active_port,
+        buildId: buildRow.rows[0].id,
+        projectId,
+        message,
+      },
+      {
+        attempts: 1,
+        removeOnComplete: {
+          age: 60 * 60,
+          count: 100,
+        },
+        removeOnFail: {
+          age: 24 * 60 * 60,
+          count: 100,
+        },
+      },
+    );
+
+    return {
+      jobId: job.id,
+      status: 'queued',
+    };
+    //on worker tasks
   }
 
   async getJob(id: string) {

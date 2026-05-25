@@ -6,8 +6,8 @@ import { CodeGenProcessor } from './code-gen.processor';
 import { SshModule } from '../ssh/ssh.module';
 import { LlmModule } from '../llm/llm.module';
 import { DbModule } from '../db/db.module';
-import { PortService } from '../ssh/port.service';
 import { PortModule } from '../ssh/port.module';
+import { CodeGenEditProcessor } from './code-gen-edit.processor';
 
 /**
  * POST /projects/:projectId/messages
@@ -36,8 +36,11 @@ import { PortModule } from '../ssh/port.module';
     BullModule.registerQueue({
       name: 'code-execution',
     }),
+    BullModule.registerQueue({
+      name: 'edit-code-execution',
+    }),
   ],
-  providers: [CodeGenService, CodeGenProcessor],
+  providers: [CodeGenService, CodeGenProcessor, CodeGenEditProcessor],
   controllers: [CodeGenController],
 })
 export class CodeGenModule {}
