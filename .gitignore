@@ -38,3 +38,6 @@ builds/
 preview-builds/
 generated-projects/
 .idea/
+
+#System related
+.DS_Store
