@@ -3,14 +3,9 @@ import { ConfigService } from '@nestjs/config';
 import { NodeSSH } from 'node-ssh';
 import { readFileSync } from 'fs';
 import { AppEnv } from '../config/env.validation';
-import { PortService } from './port.service';
-
-// type ProjectFileRow = {
-//   id: string;
-//   project_id: string;
-//   path: string;
-//   content: string;
-// };
+import { getDockerBuildCommands } from './constants/dockerBuild.constants';
+import { getDockerServeCommands } from './constants/dockerServe.constants';
+import { getScaffoldCommands } from './constants/scaffolding.constants';
 
 //TODO: move this to types
 type RemoteStepResult = {
@@ -28,10 +23,7 @@ type RemoteStepResult = {
 
 @Injectable()
 export class SshService {
-  constructor(
-    private readonly configService: ConfigService<AppEnv, true>,
-    private readonly portService: PortService,
-  ) {}
+  constructor(private readonly configService: ConfigService<AppEnv, true>) {}
 
   async sshConnect() {
     const ssh = new NodeSSH();
@@ -143,6 +135,52 @@ export class SshService {
     }
   }
 
+  async runnerBuild(
+    port: number,
+    appTsx: string,
+    imageName: string,
+    containerName: string,
+    projectId: string,
+  ) {
+    const sshNode = new NodeSSH();
+    const steps: RemoteStepResult[] = [];
+    //TODO: can move outside
+    const workspaceDir = `/mnt/preview-data/preview-platform/workspaces/${projectId}`;
+
+    try {
+      await sshNode.connect({
+        host: process.env.SSH_HOST!,
+        port: Number(process.env.SSH_PORT ?? 22),
+        username: process.env.SSH_USERNAME!,
+        privateKey: readFileSync(process.env.SSH_PRIVATE_KEY_PATH!, 'utf8'),
+      });
+      steps.push(...(await this.scaffolding(sshNode, workspaceDir)));
+
+      steps.push(
+        await this.runStep(
+          sshNode,
+          'create-app-tsx-file',
+          `cat > "${workspaceDir}/src/App.tsx" <<'EOF'
+${appTsx}
+EOF`,
+        ),
+      );
+
+      steps.push(
+        ...(await this.dockerServe(
+          sshNode,
+          workspaceDir,
+          imageName,
+          containerName,
+          port,
+        )),
+      );
+      return steps;
+    } finally {
+      sshNode.dispose();
+    }
+  }
+
   async dockerBuild(
     sshNode: NodeSSH,
     baseDir: string,
@@ -151,50 +189,30 @@ export class SshService {
     port: number,
   ) {
     const steps: RemoteStepResult[] = [];
-
-    steps.push(
-      await this.runStep(
-        sshNode,
-        'create-dockerfile',
-        `cat > "${baseDir}/Dockerfile" <<'EOF'
-FROM node:20-alpine AS builder
-
-WORKDIR /app
-
-COPY package.json ./
-RUN npm install
-
-COPY . .
-RUN npm run build
-
-FROM node:20-alpine
-
-WORKDIR /app
-
-RUN npm install -g serve
-
-COPY --from=builder /app/dist ./dist
-
-EXPOSE 3000
-
-CMD ["serve", "-s", "dist", "-l", "3000"]
-EOF`,
-      ),
+    const commands = getDockerBuildCommands(
+      baseDir,
+      imageName,
+      containerName,
+      port,
     );
 
     steps.push(
       await this.runStep(
         sshNode,
-        'verify-files',
-        `ls -la "${baseDir}" && ls -la "${baseDir}/src" && test -f "${baseDir}/Dockerfile" && test -f "${baseDir}/package.json"`,
+        'create-dockerfile',
+        commands.createDockerfile,
       ),
+    );
+
+    steps.push(
+      await this.runStep(sshNode, 'verify-files', commands.verifyFiles),
     );
 
     steps.push(
       await this.runStep(
         sshNode,
         'docker-build-image',
-        `docker build -t "${imageName}" "${baseDir}"`,
+        commands.dockerBuildImage,
       ),
     );
 
@@ -202,7 +220,7 @@ EOF`,
       await this.runStep(
         sshNode,
         'remove-old-container',
-        `docker rm -f "${containerName}" || true`,
+        commands.removeOldContainer,
       ),
     );
 
@@ -210,118 +228,97 @@ EOF`,
       await this.runStep(
         sshNode,
         'run-preview-container',
-        // TODO(security): Avoid binding preview containers on all public interfaces.
-        // Bind to localhost/internal networking and expose them only through an auth/TLS proxy.
-        `docker run -d --name "${containerName}" -p ${port}:3000 "${imageName}"`,
+        commands.runPreviewContainer,
       ),
     );
 
     return steps;
   }
 
+  async dockerServe(
+    sshNode: NodeSSH,
+    workspaceDir: string,
+    imageName: string,
+    containerName: string,
+    port: number,
+  ) {
+    const steps: RemoteStepResult[] = [];
+    const commands = getDockerServeCommands(
+      workspaceDir,
+      imageName,
+      containerName,
+      port,
+      process.env.SSH_HOST,
+    );
+
+    steps.push(
+      await this.runStep(
+        sshNode,
+        'create-dockerfile',
+        commands.createDockerfile,
+      ),
+    );
+
+    steps.push(
+      await this.runStep(sshNode, 'verify-files', commands.verifyFiles),
+    );
+
+    steps.push(
+      await this.runStep(
+        sshNode,
+        'build-preview-image',
+        commands.buildPreviewImage,
+      ),
+    );
+
+    steps.push(
+      await this.runStep(
+        sshNode,
+        'remove-existing-container',
+        commands.removeExistingContainer,
+      ),
+    );
+
+    steps.push(
+      await this.runStep(
+        sshNode,
+        'run-preview-container',
+        commands.runPreviewContainer,
+      ),
+    );
+
+    steps.push(
+      await this.runStep(sshNode, 'preview-url-log', commands.previewUrlLog),
+    );
+
+    return steps;
+  }
+
+  //TODO: UTIL CLASS
   async scaffolding(sshNode: NodeSSH, baseDir: string) {
     const steps: RemoteStepResult[] = [];
+    const commands = getScaffoldCommands(baseDir);
 
     steps.push(
       await this.runStep(
         sshNode,
-        'delete-old-create-new-folder',
-        `rm -rf "${baseDir}" && mkdir -p "${baseDir}/src"`,
-      ),
-    );
-
-    steps.push(
-      await this.runStep(
-        sshNode,
-        'create-package-json-file',
-        `cat > "${baseDir}/package.json" <<'EOF'
-{
-"scripts": {
-  "build": "vite build"
-},
-"dependencies": {
-  "@vitejs/plugin-react": "latest",
-  "vite": "latest",
-  "typescript": "latest",
-  "react": "latest",
-  "react-dom": "latest",
-  "serve": "latest"
-},
-"devDependencies": {}
-}
-EOF`,
-      ),
-    );
-
-    steps.push(
-      await this.runStep(
-        sshNode,
-        'create-index-html-file',
-        `cat > "${baseDir}/index.html" <<'EOF'
-<!doctype html>
-<html>
-<head>
-  <title>React Preview</title>
-</head>
-<body>
-  <div id="root"></div>
-  <script type="module" src="/src/main.tsx"></script>
-</body>
-</html>
-EOF`,
-      ),
-    );
-
-    steps.push(
-      await this.runStep(
-        sshNode,
-        'create-main-tsx-file',
-        `cat > "${baseDir}/src/main.tsx" <<'EOF'
-import React from 'react';
-import ReactDOM from 'react-dom/client';
-import './style.css';
-import App from './App'
-
-ReactDOM.createRoot(document.getElementById('root')!).render(
-<React.StrictMode>
-<App />
-</React.StrictMode>
-);
-EOF`,
-      ),
-    );
-
-    steps.push(
-      await this.runStep(
-        sshNode,
-        'create-css-file',
-        `cat > "${baseDir}/src/style.css" <<'EOF'
-body {
-margin: 0;
-font-family: system-ui, sans-serif;
-background: #111827;
-color: white;
-}
-
-.page {
-min-height: 100vh;
-display: grid;
-place-content: center;
-text-align: center;
-}
-EOF`,
+        'create-workspace',
+        commands.copyTemplateProject,
       ),
     );
 
     return steps;
   }
 
+  //TODO: Duplicated Code need to refactor this file
+  //SERVICE
   async runPreviewBuild(
     appTsx: string,
     buildId: string,
     imageName: string,
     containerName: string,
     port: number,
+    //need project id passed.
   ): Promise<RemoteStepResult[]> {
     const sshNode = new NodeSSH();
     const steps: RemoteStepResult[] = [];
@@ -372,27 +369,12 @@ EOF`,
     }
   }
 
-  /**
-   *
-   * @param appTsx
-   * Connect to the instance
-   * Update the file
-   * Rebuild the image
-   * Stop the container
-   * Start the new build
-   * Serve
-   */
-
-  async updateFile(
-    appTsx: string,
-    buildId: string,
-    imageName: string,
-    containerName: string,
-    port: number,
-  ) {
+  //TODO: Duplicated Code need to refactor this file
+  //SERVICE
+  async updateFile(appTsx: string, projectId: string) {
     const sshNode = new NodeSSH();
     const steps: RemoteStepResult[] = [];
-    const baseDir = `/mnt/preview-data/preview-platform/builds/${buildId}`;
+    const baseDir = `/mnt/preview-data/preview-platform/workspaces/${projectId}`;
 
     try {
       //connect to the instance
@@ -402,9 +384,6 @@ EOF`,
         username: process.env.SSH_USERNAME!,
         privateKey: readFileSync(process.env.SSH_PRIVATE_KEY_PATH!, 'utf8'),
       });
-
-      //scaffolding
-      steps.push(...(await this.scaffolding(sshNode, baseDir)));
 
       //add the new file
       steps.push(
@@ -417,16 +396,7 @@ EOF`,
         ),
       );
 
-      //build
-      steps.push(
-        ...(await this.dockerBuild(
-          sshNode,
-          baseDir,
-          imageName,
-          containerName,
-          port,
-        )),
-      );
+      console.log('done')
 
       return steps;
     } finally {

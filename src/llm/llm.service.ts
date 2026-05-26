@@ -65,18 +65,23 @@ export class LlmService implements OnModuleInit {
 
   constructor(private readonly configService: ConfigService<AppEnv, true>) {}
 
-  async onModuleInit() {
-    this.cookie = await this.getAuthCookie();
+  onModuleInit() {
+    // this.cookie = await this.getAuthCookie();
+    // this.client = new OpenAI({
+    //   apiKey: 'not-needed',
+    //   baseURL: buildVllmOpenAIBaseURL(
+    //     this.configService.getOrThrow('VAST_BASE_URL', {
+    //       infer: true,
+    //     }),
+    //   ),
+    //   defaultHeaders: {
+    //     Cookie: this.cookie,
+    //   },
+    // });
     this.client = new OpenAI({
-      apiKey: 'not-needed',
-      baseURL: buildVllmOpenAIBaseURL(
-        this.configService.getOrThrow('VAST_BASE_URL', {
-          infer: true,
-        }),
-      ),
-      defaultHeaders: {
-        Cookie: this.cookie,
-      },
+      apiKey: this.configService.getOrThrow('OPENAI_API_KEY', {
+        infer: true,
+      }),
     });
   }
 
@@ -99,7 +104,7 @@ export class LlmService implements OnModuleInit {
 
   async chat(message: string) {
     const response = await this.client.chat.completions.create({
-      model: this.configService.getOrThrow('VAST_MODEL', {
+      model: this.configService.getOrThrow('OPENAI_MODEL', {
         infer: true,
       }),
       messages: [
@@ -115,7 +120,7 @@ export class LlmService implements OnModuleInit {
 
   async generateNewEdit(message: string, appTsx?: string) {
     const response = await this.client.chat.completions.create({
-      model: this.configService.getOrThrow('VAST_MODEL', {
+      model: this.configService.getOrThrow('OPENAI_MODEL', {
         infer: true,
       }),
       messages: [

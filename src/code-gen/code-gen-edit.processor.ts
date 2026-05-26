@@ -39,16 +39,13 @@ export class CodeGenEditProcessor extends WorkerHost {
 
     await this.dbService.query(
       `
-      UPDATE preview_platform.project_build
-      SET job_id = $1,
-          updated_at = now(),
-          status = 'building'
-      WHERE id = $2
-  `,
-      [String(job.id), job.data.buildId],
+          UPDATE preview_platform.project
+          SET status = $1,
+              updated_at = now()
+          WHERE id = $2
+      `,
+      ['building', job.data.projectId],
     );
-
-    const { port, buildId } = job.data || {};
 
     //get existing code
     const existingCode = await this.dbService.query<{ content: string }>(
@@ -83,22 +80,10 @@ export class CodeGenEditProcessor extends WorkerHost {
       [rawCode, job.data.projectId],
     );
 
-    /**
-     * buildId: string,
-     imageName: string,
-     containerName: string,
-     port: number,
-     */
-    const imageName = `preview-${job.data.projectId}-${job.data.buildId}`;
-    const containerName = `preview-${job.data.projectId}`;
-
     const extractCode = extractCode_v2(rawCode);
     const logs = await this.sshService.updateFile(
       extractCode,
-      buildId,
-      imageName,
-      containerName,
-      port,
+      job.data.projectId,
     );
 
     await job.updateProgress(75);
@@ -108,24 +93,16 @@ export class CodeGenEditProcessor extends WorkerHost {
     //success
     await this.dbService.query(
       `
-          UPDATE preview_platform.project_build
-          SET status = 'running',
-              preview_url = $1,
-              container_name = $2,
-              image_name = $3,
-              logs = $4,
-              completed_at = now(),
+          UPDATE preview_platform.project
+          SET preview_url = $1,
+              status = $2,
               updated_at = now()
-          WHERE id = $5;
-  `,
-      // TODO(security): Do not expose previews through direct unauthenticated HTTP URLs.
-      // Route them through an authenticated HTTPS proxy or enforce network allowlists.
+          WHERE id = $3
+      `,
       [
         `http://${process.env.SSH_HOST}:${job.data.port}/`,
-        `preview-${job.data.projectId}`,
-        `preview-${job.data.projectId}-${job.data.buildId}`,
-        result,
-        job.data.buildId,
+        'preview',
+        job.data.projectId,
       ],
     );
 
