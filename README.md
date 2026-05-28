@@ -1,4 +1,4 @@
-# Agentic AI Infrastructure
+# ShipForge — AI app generation and preview + build infrastructure.
 
 NestJS backend for generating Vite React `src/App.tsx` files with an OpenAI-compatible/vLLM provider, storing project state in Postgres, and building/running preview containers on a remote Docker host over SSH.
 
