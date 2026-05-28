@@ -12,7 +12,7 @@ services:
       PORT: 3000
 
       OPENAI_API_KEY: ${OPENAI_API_KEY}
-      OPENAI_MODEL: gpt-4o-mini
+      OPENAI_MODEL: ${OPENAI_MODEL}
       VAST_BASE_URL: ${VAST_BASE_URL}
       VAST_AUTH_URL: ${VAST_AUTH_URL}
       VAST_MODEL: ${VAST_MODEL}

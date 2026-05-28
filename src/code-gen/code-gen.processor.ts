@@ -8,7 +8,6 @@ import { DbService } from '../db/db.service';
 type TaskJobData = {
   message: string;
   projectId: string;
-  buildId: string;
   port: number;
 };
 
@@ -32,20 +31,19 @@ export class CodeGenProcessor extends WorkerHost {
   }
 
   async process(job: Job<TaskJobData>) {
-    const { message, buildId } = job.data;
+    const { message } = job.data;
 
     console.log(`Processing job ${job.id}`);
     console.log(`Message: ${message}`);
 
     await this.dbService.query(
       `
-      UPDATE preview_platform.project_build
-      SET job_id = $1,
-          updated_at = now(),
-          status = 'building'
-      WHERE id = $2
-  `,
-      [String(job.id), buildId],
+        UPDATE preview_platform.project
+        SET updated_at = now(),
+            status = 'building'
+        WHERE id = $1
+    `,
+      [job.data.projectId],
     );
 
     return {
@@ -64,15 +62,12 @@ export class CodeGenProcessor extends WorkerHost {
     if (!rawCode) {
       await this.dbService.query(
         `
-            UPDATE preview_platform.project_build
-            SET status = 'failed',
-                error = $1,
-                logs = $2,
-                completed_at = now(),
-                updated_at = now()
-            WHERE id = $3;
-  `,
-        ['TBA', [], job.data.buildId],
+          UPDATE preview_platform.project
+          SET updated_at = now(),
+              status = 'errored'
+          WHERE id = $1
+      `,
+        [job.data.projectId],
       );
       throw new Error('Job failed, no code received');
     }
@@ -87,14 +82,14 @@ export class CodeGenProcessor extends WorkerHost {
       [job.data.projectId, 'src/App.tsx', rawCode],
     );
 
-    const extractCode = extractCode_v2(rawCode);
+    const extractedCode = extractCode_v2(rawCode);
 
-    const runLogs = await this.sshService.runPreviewBuild(
-      extractCode,
-      job.data.buildId, //buildId
-      `preview-${job.data.projectId}-${job.data.buildId}`, //image_name
-      `preview-${job.data.projectId}`, //container_name
+    const runLogs = await this.sshService.runnerBuild(
       job.data.port,
+      extractedCode,
+      `preview-dev-${job.data.projectId}`,
+      `preview-${job.data.projectId}`,
+      job.data.projectId,
     );
 
     await job.updateProgress(75);
@@ -102,26 +97,42 @@ export class CodeGenProcessor extends WorkerHost {
     await job.updateProgress(100);
 
     //success
+    //   await this.dbService.query(
+    //     `
+    //         UPDATE preview_platform.project_build
+    //         SET status = 'running',
+    //             artifact_url = $1,
+    //             container_name = $2,
+    //             image_name = $3,
+    //             logs = $4,
+    //             completed_at = now(),
+    //             updated_at = now()
+    //         WHERE id = $5;
+    // `,
+    //     // TODO(security): Do not expose previews through direct unauthenticated HTTP URLs.
+    //     // Route them through an authenticated HTTPS proxy or enforce network allowlists.
+    //     [
+    //       `http://${process.env.SSH_HOST}:${job.data.port}/`,
+    //       `preview-${job.data.projectId}`,
+    //       `preview-${job.data.projectId}-${job.data.buildId}`,
+    //       result,
+    //       job.data.buildId,
+    //     ],
+    //   );
+    //
+
     await this.dbService.query(
       `
-          UPDATE preview_platform.project_build
-          SET status = 'running',
-              preview_url = $1,
-              container_name = $2,
-              image_name = $3,
-              logs = $4,
-              completed_at = now(),
-              updated_at = now()
-          WHERE id = $5;
-  `,
-      // TODO(security): Do not expose previews through direct unauthenticated HTTP URLs.
-      // Route them through an authenticated HTTPS proxy or enforce network allowlists.
+      UPDATE preview_platform.project
+      SET preview_url = $1,
+          status = $2,
+          updated_at = now()
+      WHERE id = $3
+      `,
       [
         `http://${process.env.SSH_HOST}:${job.data.port}/`,
-        `preview-${job.data.projectId}`,
-        `preview-${job.data.projectId}-${job.data.buildId}`,
-        result,
-        job.data.buildId,
+        'preview',
+        job.data.projectId,
       ],
     );
     return result;

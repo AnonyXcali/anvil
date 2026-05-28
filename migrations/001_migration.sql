@@ -5,8 +5,10 @@ CREATE EXTENSION IF NOT EXISTS pgcrypto;
 CREATE TABLE IF NOT EXISTS preview_platform.project (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     name TEXT NOT NULL,
+    --Why status?
     status TEXT NOT NULL DEFAULT 'active',
     active_port INTEGER,
+    preview_url TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -38,7 +40,7 @@ CREATE TABLE IF NOT EXISTS preview_platform.project_build (
       status TEXT NOT NULL DEFAULT 'queued',
       host_port INTEGER NOT NULL,
 
-      preview_url TEXT,
+      artifact_url TEXT,
       container_name TEXT,
       image_name TEXT,
 

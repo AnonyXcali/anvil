@@ -30,13 +30,11 @@ export class CodeGenService {
     private readonly queue: Queue<{
       message: string;
       projectId: string;
-      buildId: string;
       port: number;
     }>,
     @InjectQueue('edit-code-execution')
     private readonly editQueue: Queue<{
       port: number;
-      buildId: string;
       projectId: string;
       message: string;
     }>,
@@ -59,14 +57,14 @@ export class CodeGenService {
     );
 
     //DB: build row create
-    const buildRow = await this.dbService.query<{ id: string }>(
-      `
-      INSERT INTO preview_platform.project_build(project_id, status, host_port, started_at)
-      VALUES ($1, $2, $3, $4)
-      RETURNING id;
-    `,
-      [db.rows[0].id, 'queued', port, new Date()],
-    );
+    // const buildRow = await this.dbService.query<{ id: string }>(
+    //   `
+    //   INSERT INTO preview_platform.project_build(project_id, status, host_port, started_at)
+    //   VALUES ($1, $2, $3, $4)
+    //   RETURNING id;
+    // `,
+    //   [db.rows[0].id, 'queued', port, new Date()],
+    // );
 
     //add to the queue
     const job = await this.queue.add(
@@ -74,7 +72,6 @@ export class CodeGenService {
       {
         message,
         projectId: db.rows[0].id,
-        buildId: buildRow.rows[0].id,
         port,
       },
       {
@@ -115,20 +112,19 @@ export class CodeGenService {
     }
 
     //DB: build row create
-    const buildRow = await this.dbService.query<{ id: string }>(
-      `
-      INSERT INTO preview_platform.project_build(project_id, status, host_port, started_at)
-      VALUES ($1, $2, $3, $4)
-      RETURNING id;
-    `,
-      [projectId, 'queued', activePort, new Date()],
-    );
+    // const buildRow = await this.dbService.query<{ id: string }>(
+    //   `
+    //   INSERT INTO preview_platform.project_build(project_id, status, host_port, started_at)
+    //   VALUES ($1, $2, $3, $4)
+    //   RETURNING id;
+    // `,
+    //   [projectId, 'queued', activePort, new Date()],
+    // );
 
     const job = await this.editQueue.add(
-      'run-code',
+      'edit-code',
       {
         port: port.rows[0].active_port,
-        buildId: buildRow.rows[0].id,
         projectId,
         message,
       },
