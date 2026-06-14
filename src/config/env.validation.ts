@@ -9,6 +9,8 @@ export type AppEnv = {
   SSH_PORT: number;
   SSH_USERNAME: string;
   SSH_PRIVATE_KEY_PATH: string;
+  // TODO: SECURITY - require BETTER_AUTH_SECRET here and validate that it is strong enough for auth/session signing.
+  BETTER_AUTH_URL: string;
 };
 
 function requireString(
@@ -67,5 +69,6 @@ export function validateEnv(config: Record<string, unknown>): AppEnv {
       config.SSH_PRIVATE_KEY_PATH,
       'SSH_PRIVATE_KEY_PATH',
     ),
+    BETTER_AUTH_URL: requireString(config.BETTER_AUTH_URL, 'BETTER_AUTH_URL'),
   };
 }
