@@ -8,6 +8,8 @@ import { SshModule } from './ssh/ssh.module';
 import { CodeGenModule } from './code-gen/code-gen.module';
 import { BullModule } from '@nestjs/bullmq';
 import { DbModule } from './db/db.module';
+import { AuthModule } from './auth/auth.module';
+import { UserModule } from './user/user.module';
 
 /**
  * Fix update flow [DONE]
@@ -43,6 +45,8 @@ import { DbModule } from './db/db.module';
     SshModule,
     CodeGenModule,
     DbModule,
+    AuthModule,
+    UserModule,
   ],
   controllers: [AppController],
   providers: [AppService],

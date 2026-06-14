@@ -6,7 +6,7 @@ services:
     container_name: preview-api
     restart: unless-stopped
     ports:
-      - "3000:3000"
+      - '3000:3000'
     environment:
       NODE_ENV: production
       PORT: 3000
@@ -16,11 +16,15 @@ services:
       VAST_BASE_URL: ${VAST_BASE_URL}
       VAST_AUTH_URL: ${VAST_AUTH_URL}
       VAST_MODEL: ${VAST_MODEL}
+      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET}
+      BETTER_AUTH_URL: ${BETTER_AUTH_URL}
 
       REDIS_HOST: redis
       REDIS_PORT: 6379
 
-      DATABASE_URL: postgresql://preview_user:preview_password@postgres:5432/preview_platform
+      # TODO: SECURITY - inject database credentials via env/secrets instead of hardcoding preview_user/preview_password.
+      #unsafe password usage
+      DATABASE_URL: postgresql://preview_user:preview_password@postgres:5432/preview_platform?options=-c%20search_path%3Dpreview_platform
 
       SSH_HOST: ${SSH_HOST}
       SSH_PORT: ${SSH_PORT}
@@ -37,21 +41,24 @@ services:
     container_name: preview-redis
     restart: unless-stopped
     ports:
-      - "6379:6379"
+      # TODO: SECURITY - avoid publishing unauthenticated Redis on the host, or bind it to localhost for local-only access.
+      - '6379:6379'
 
   postgres:
     image: postgres:17-alpine
     container_name: preview-postgres
     restart: unless-stopped
     environment:
+      #unsafe credentials leak.
       POSTGRES_USER: preview_user
+      # TODO: SECURITY - inject the Postgres password via env/secrets instead of hardcoding it.
       POSTGRES_PASSWORD: preview_password
       POSTGRES_DB: preview_platform
     ports:
-      - "5432:5432"
+      # TODO: SECURITY - avoid publishing Postgres on the host, or bind it to localhost for local-only access.
+      - '5432:5432'
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./migrations:/docker-entrypoint-initdb.d
 
 secrets:
   azure_preview_vm_key:
