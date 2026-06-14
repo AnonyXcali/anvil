@@ -10,6 +10,7 @@ import { BullModule } from '@nestjs/bullmq';
 import { DbModule } from './db/db.module';
 import { AuthModule } from './auth/auth.module';
 import { UserModule } from './user/user.module';
+import { CoreModule } from './core/core.module';
 
 /**
  * Fix update flow [DONE]
@@ -47,6 +48,7 @@ import { UserModule } from './user/user.module';
     DbModule,
     AuthModule,
     UserModule,
+    CoreModule,
   ],
   controllers: [AppController],
   providers: [AppService],

@@ -33,7 +33,7 @@ export const up = (pgm) => {
     retries integer default 0,
     error text,
         state preview_platform.job_status NOT NULL default 'queued' ,
-        type preview_platform.job_type NOT NULL,
+        type text NOT NULL,
 
         FOREIGN KEY ("conversation_id")
             REFERENCES "preview_platform"."conversation"("id")
