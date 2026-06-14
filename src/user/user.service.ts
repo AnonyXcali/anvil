@@ -11,6 +11,6 @@ export class UserService {
   ) {}
 
   async getUsers() {
-    return this.db.selectFrom('user').selectAll().execute();
+    return this.db.selectFrom('preview_platform.user').selectAll().execute();
   }
 }
