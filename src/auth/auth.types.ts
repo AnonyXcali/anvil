@@ -1,3 +1,3 @@
-import { User } from '../db/db.types';
+import { PreviewPlatformUser as User } from '../db/db.types';
 
 export type UserParams = Pick<User, 'name' | 'email'> & { password: string };

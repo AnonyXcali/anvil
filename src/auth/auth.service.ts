@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { auth } from 'src/lib/auth';
-import { User } from '../db/db.types';
+import { PreviewPlatformUser as User } from '../db/db.types';
 import { ConfigService } from '@nestjs/config';
 
 type UserParams = Pick<User, 'name' | 'email'> & { password: string };
