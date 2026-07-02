@@ -14,6 +14,18 @@ export const up = (pgm) => {
 
     CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
+    -- updated_at function
+    CREATE OR REPLACE FUNCTION "preview_platform"."set_current_timestamp_updated_at"()
+    RETURNS TRIGGER AS $$
+    DECLARE
+      _new record;
+    BEGIN
+      _new := NEW;
+      _new."updated_at" = NOW();
+      RETURN _new;
+    END;
+    $$ LANGUAGE plpgsql;
+
     CREATE TABLE IF NOT EXISTS preview_platform.project (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       name TEXT NOT NULL,
@@ -109,6 +121,30 @@ export const up = (pgm) => {
 
     CREATE INDEX IF NOT EXISTS "verification_identifier_idx"
       ON preview_platform."verification" ("identifier");
+
+    -- project updated_at trigger
+    CREATE TRIGGER "set_preview_platform_project_updated_at"
+    BEFORE UPDATE ON "preview_platform"."project"
+    FOR EACH ROW
+    EXECUTE PROCEDURE "preview_platform"."set_current_timestamp_updated_at"();
+    COMMENT ON TRIGGER "set_preview_platform_project_updated_at" ON "preview_platform"."project"
+    IS 'trigger to set value of column "updated_at" to current timestamp on row update';
+
+    -- project_file updated_at trigger
+    CREATE TRIGGER "set_preview_platform_project_file_updated_at"
+    BEFORE UPDATE ON "preview_platform"."project_file"
+    FOR EACH ROW
+    EXECUTE PROCEDURE "preview_platform"."set_current_timestamp_updated_at"();
+    COMMENT ON TRIGGER "set_preview_platform_project_file_updated_at" ON "preview_platform"."project_file"
+    IS 'trigger to set value of column "updated_at" to current timestamp on row update';
+
+    -- project_build updated_at trigger
+    CREATE TRIGGER "set_preview_platform_project_build_updated_at"
+    BEFORE UPDATE ON "preview_platform"."project_build"
+    FOR EACH ROW
+    EXECUTE PROCEDURE "preview_platform"."set_current_timestamp_updated_at"();
+    COMMENT ON TRIGGER "set_preview_platform_project_build_updated_at" ON "preview_platform"."project_build"
+    IS 'trigger to set value of column "updated_at" to current timestamp on row update';
   `);
 };
 
@@ -131,6 +167,8 @@ export const down = (pgm) => {
     DROP TABLE IF EXISTS preview_platform.project_build;
     DROP TABLE IF EXISTS preview_platform.project_file;
     DROP TABLE IF EXISTS preview_platform.project;
+
+    DROP FUNCTION IF EXISTS preview_platform.set_current_timestamp_updated_at();
 
     DROP SCHEMA IF EXISTS preview_platform;
   `);

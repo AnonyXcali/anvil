@@ -16,6 +16,7 @@ function getPort(configService: ConfigService<AppEnv, true>): number {
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule, {
+    logger: ['error', 'log', 'warn'],
     // The library will re-add the default body parsers for non-auth routes.
     // TODO: SECURITY - add integration tests for request parsing limits and webhook raw-body behavior.
     bodyParser: false,

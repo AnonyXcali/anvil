@@ -396,7 +396,7 @@ EOF`,
         ),
       );
 
-      console.log('done')
+      console.log('done');
 
       return steps;
     } finally {

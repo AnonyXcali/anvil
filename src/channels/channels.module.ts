@@ -1,10 +1,10 @@
 import { Module } from '@nestjs/common';
-import { PortService } from './port.service';
+import { ChannelsService } from './channels.service';
 import { SharedredisModule } from 'src/sharedredis/sharedredis.module';
 
 @Module({
-  providers: [PortService],
+  providers: [ChannelsService],
   imports: [SharedredisModule],
-  exports: [PortService],
+  exports: [ChannelsService],
 })
-export class PortModule {}
+export class ChannelsModule {}
