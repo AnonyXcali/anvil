@@ -11,6 +11,12 @@ import { DbModule } from './db/db.module';
 import { AuthModule } from './auth/auth.module';
 import { UserModule } from './user/user.module';
 import { CoreModule } from './core/core.module';
+import { ChannelsModule } from './channels/channels.module';
+import { SharedredisModule } from './sharedredis/sharedredis.module';
+import { IntentModule } from './intent/intent.module';
+import { ConversationModule } from './conversation/conversation.module';
+import { StorageModule } from './storage/storage.module';
+import { JobModule } from './job/job.module';
 
 /**
  * Fix update flow [DONE]
@@ -49,6 +55,12 @@ import { CoreModule } from './core/core.module';
     AuthModule,
     UserModule,
     CoreModule,
+    ChannelsModule,
+    SharedredisModule,
+    IntentModule,
+    ConversationModule,
+    StorageModule,
+    JobModule,
   ],
   controllers: [AppController],
   providers: [AppService],

@@ -1,10 +1,10 @@
 import { Inject, Injectable, OnModuleInit } from '@nestjs/common';
 import Redis from 'ioredis';
-import { PORT_REDIS } from './port.constants';
+import { REDIS } from 'src/tokens';
 
 @Injectable()
 export class PortService implements OnModuleInit {
-  constructor(@Inject(PORT_REDIS) private readonly redis: Redis) {}
+  constructor(@Inject(REDIS) private readonly redis: Redis) {}
 
   async onModuleInit() {
     const exists = await this.redis.exists('available_ports');

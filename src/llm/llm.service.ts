@@ -1,7 +1,16 @@
-import { Injectable, OnModuleInit } from '@nestjs/common';
+import { Injectable, OnModuleInit, Logger, Inject } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { OpenAI } from 'openai';
 import { AppEnv } from '../config/env.validation';
+import type { DB } from 'src/db/db.types';
+import { Kysely } from 'kysely';
+import {
+  INTENT_CLASSIFIER_PROMPT,
+  CONVERSATION_SYSTEM_PROMPT,
+} from './llm.prompts';
+import { ChannelsService } from 'src/channels/channels.service';
+import { KYSELY_DB } from 'src/tokens';
+import { Messages } from 'src/types/types';
 
 //TODO: this would evolve with rest of the scaffolding
 const SYSTEM_PROMPT = `
@@ -60,10 +69,14 @@ export function buildVllmOpenAIBaseURL(baseURL: string): string {
 
 @Injectable()
 export class LlmService implements OnModuleInit {
+  private readonly logger = new Logger(LlmService.name);
   private client: OpenAI;
-  private cookie: string;
 
-  constructor(private readonly configService: ConfigService<AppEnv, true>) {}
+  constructor(
+    private readonly configService: ConfigService<AppEnv, true>,
+    private readonly channelService: ChannelsService,
+    @Inject(KYSELY_DB) private readonly db: Kysely<DB>,
+  ) {}
 
   onModuleInit() {
     // this.cookie = await this.getAuthCookie();
@@ -132,5 +145,75 @@ export class LlmService implements OnModuleInit {
       ],
     });
     return response.choices[0]?.message.content ?? null;
+  }
+
+  async intent(query: string) {
+    const response = await this.client.chat.completions.create({
+      model: this.configService.getOrThrow('OPENAI_MODEL', {
+        infer: true,
+      }),
+      messages: [
+        {
+          role: 'system',
+          content: INTENT_CLASSIFIER_PROMPT,
+        },
+        { role: 'user', content: query },
+      ],
+    });
+    return response.choices[0]?.message.content ?? null;
+  }
+
+  async conversational(
+    query: string,
+    channelId: string,
+    jobId: string,
+    messages: Messages,
+  ) {
+    this.logger.log('Query:' + query);
+    let constructedMessage = '';
+
+    const baseKey = `conversation:${channelId}:job:${jobId}`;
+    const seqKey = `${baseKey}:seq`;
+    const listKey = `${baseKey}:chunks`;
+    const metaKey = `${baseKey}:meta`;
+    const channelKey = channelId;
+
+    this.logger.log('=========MESSAGES FOR LLM===============');
+    this.logger.log(messages);
+    this.logger.log('=========MESSAGES FOR LLM==============');
+
+    const response = await this.client.chat.completions.create({
+      model: this.configService.getOrThrow('OPENAI_MODEL', {
+        infer: true,
+      }),
+      reasoning_effort: 'low',
+      //compacting required for X amount of messages.
+      messages: [
+        {
+          role: 'system',
+          content: CONVERSATION_SYSTEM_PROMPT,
+        },
+        ...messages,
+      ],
+      stream: true,
+    });
+
+    for await (const chunk of response) {
+      const content = chunk.choices[0]?.delta?.content;
+      this.logger.log('chunk: ' + content);
+      constructedMessage += content;
+
+      if (content && typeof content === 'string') {
+        await this.channelService.publishAndStoreChunk(
+          content,
+          seqKey,
+          listKey,
+          metaKey,
+          channelKey,
+        );
+      }
+    }
+
+    return constructedMessage;
   }
 }

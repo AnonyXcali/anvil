@@ -20,18 +20,24 @@ export const up = (pgm) => {
 
     CREATE TABLE preview_platform.conversation (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id text NOT NULL,
       state preview_platform.conversation_state default 'active',
       created_at timestamptz NOT NULL DEFAULT now(),
-      updated_at timestamptz NOT NULL DEFAULT now()
+      updated_at timestamptz NOT NULL DEFAULT now(),
+
+      FOREIGN KEY ("user_id")
+          REFERENCES "preview_platform"."user"("id")
+          ON UPDATE restrict
+          ON DELETE restrict
     );
 
     CREATE TABLE preview_platform.jobs (
-        id uuid PRIMARY KEY default gen_random_uuid(),
+        id text PRIMARY KEY NOT NULL,
         conversation_id uuid NOT NULL,
         created_at timestamptz NOT NULL DEFAULT now(),
         updated_at timestamptz NOT NULL DEFAULT now(),
-    retries integer default 0,
-    error text,
+        retries integer default 0,
+        error text,
         state preview_platform.job_status NOT NULL default 'queued' ,
         type text NOT NULL,
 
@@ -56,7 +62,31 @@ export const up = (pgm) => {
           ON DELETE restrict
     );
 
-    `);
+    -- conversation updated_at trigger
+    CREATE TRIGGER "set_preview_platform_conversation_updated_at"
+    BEFORE UPDATE ON "preview_platform"."conversation"
+    FOR EACH ROW
+    EXECUTE PROCEDURE "preview_platform"."set_current_timestamp_updated_at"();
+    COMMENT ON TRIGGER "set_preview_platform_conversation_updated_at" ON "preview_platform"."conversation"
+    IS 'trigger to set value of column "updated_at" to current timestamp on row update';
+
+    -- jobs updated_at trigger
+    CREATE TRIGGER "set_preview_platform_jobs_updated_at"
+    BEFORE UPDATE ON "preview_platform"."jobs"
+    FOR EACH ROW
+    EXECUTE PROCEDURE "preview_platform"."set_current_timestamp_updated_at"();
+    COMMENT ON TRIGGER "set_preview_platform_jobs_updated_at" ON "preview_platform"."jobs"
+    IS 'trigger to set value of column "updated_at" to current timestamp on row update';
+
+    -- messages updated_at trigger
+    CREATE TRIGGER "set_preview_platform_messages_updated_at"
+    BEFORE UPDATE ON "preview_platform"."message"
+    FOR EACH ROW
+    EXECUTE PROCEDURE "preview_platform"."set_current_timestamp_updated_at"();
+    COMMENT ON TRIGGER "set_preview_platform_messages_updated_at" ON "preview_platform"."message"
+    IS 'trigger to set value of column "updated_at" to current timestamp on row update';
+
+  `);
 };
 
 /**

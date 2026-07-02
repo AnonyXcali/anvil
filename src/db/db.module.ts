@@ -3,7 +3,7 @@ import { Module, OnApplicationShutdown, Inject } from '@nestjs/common';
 import { Kysely, PostgresDialect } from 'kysely';
 import { Pool } from 'pg';
 import type { DB } from './db.types';
-import { KYSELY_DB } from './db.constants';
+import { KYSELY_DB } from 'src/tokens';
 import { DbService } from './db.service';
 // TODO: SECURITY - route environment loading through ConfigModule/ConfigService instead of importing dotenv in application code.
 import 'dotenv/config';

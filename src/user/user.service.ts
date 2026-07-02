@@ -1,6 +1,6 @@
 import { Injectable, Inject } from '@nestjs/common';
 import { Kysely } from 'kysely';
-import { KYSELY_DB } from 'src/db/db.constants';
+import { KYSELY_DB } from 'src/tokens';
 import type { DB } from 'src/db/db.types';
 
 @Injectable()
