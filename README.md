@@ -1,171 +1,221 @@
-# ShipForge — AI app generation and preview + build infrastructure.
+# Ship forge
 
-NestJS backend for generating Vite React `src/App.tsx` files with an OpenAI-compatible/vLLM provider, storing project state in Postgres, and building/running preview containers on a remote Docker host over SSH.
+Ship forge is a NestJS backend for AI conversations and React preview generation.
 
-This is a work-in-progress preview platform. It is useful for local experiments, but the current preview URLs are direct unauthenticated HTTP endpoints and should not be treated as production-safe.
+The main flow lives in [`src/core/`](src/core/). It creates authenticated conversations, classifies user intent, queues background work, and streams model responses back to the client.
 
-## Objective
+## What it does
 
-The goal is to provide a small backend for prompt-driven React preview generation:
+- Runs authenticated AI conversations with Better Auth sessions.
+- Uses OpenAI with bring-your-own-key support through `.env`.
+- Streams assistant responses with Redis Pub/Sub and Server-Sent Events.
+- Stores users, conversations, messages, jobs, projects, and generated files in Postgres.
+- Supports direct React `src/App.tsx` preview generation on a user-provided SSH host.
+- Uses BullMQ queues for long-running work.
 
-- expose an HTTP API for code-generation requests;
-- generate only the contents of `src/App.tsx` for a Vite React TypeScript app;
-- persist projects, files, builds, logs, and preview URLs in Postgres;
-- process builds asynchronously with BullMQ and Redis;
-- deploy generated previews to a remote Docker host through SSH;
-- keep model provider credentials, SSH credentials, and execution host details outside source code.
+## Main architecture
 
-## Architecture
+- `CoreModule`: starts and continues user conversations.
+- `IntentModule`: classifies each user request as instant or offloaded work.
+- `ConversationModule`: handles normal model responses.
+- `LlmModule`: wraps OpenAI calls.
+- `ChannelsModule`: streams response chunks over Redis and SSE.
+- `CodeGenModule`: generates and edits React previews.
+- `SshModule`: writes files and runs Docker previews on a remote host.
+- `AuthModule`: handles Better Auth sign-up and sign-in.
 
-The main flow is handled by `POST /code-gen`:
+## Core flow
 
-1. The request body supplies `type`, `message`, and `project_name`.
-2. `CodeGenService` creates a project row in the `preview_platform` Postgres schema.
-3. `LlmService` authenticates to the configured Vast/vLLM endpoint, calls the OpenAI-compatible chat-completions API, and generates `src/App.tsx`.
-4. The generated file is stored in `preview_platform.project_file`.
-5. A build row is created in `preview_platform.project_build`.
-6. `PortService` allocates a preview port from Redis DB `1`.
-7. A BullMQ job is added to the `code-execution` queue on Redis DB `0`.
-8. `CodeGenProcessor` loads the stored file, scaffolds/builds the preview on the remote SSH host, runs a Docker container, and updates the build row with logs and the preview URL.
+`POST /core` starts a new authenticated conversation.
 
-Main modules:
+```json
+{
+  "query": "Explain how React state works"
+}
+```
 
-- `CodeGenModule`: request handling, build records, queue jobs, and workers.
-- `LlmModule`: Vast/vLLM cookie auth and OpenAI-compatible model calls.
-- `SshModule`: SSH connection, remote file operations, Docker build/run commands.
-- `DbModule`: Postgres access through `pg`.
-- `PortModule`: Redis-backed preview port pool.
+Response:
 
-There is also a lower-level `/ssh` endpoint for debugging the configured SSH connection.
+```json
+{
+  "job_id": "1",
+  "conversation_id": "conversation-uuid"
+}
+```
+
+`POST /core/talk` adds a message to an existing conversation.
+
+```json
+{
+  "query": "Can you explain that with an example?",
+  "conversation_id": "conversation-uuid"
+}
+```
+
+`GET /core/:conversation_id` opens the SSE stream for model chunks.
+
+## Code generation flow
+
+`POST /code-gen` creates a React preview by generating `src/App.tsx`.
+
+```json
+{
+  "project_name": "demo-preview",
+  "message": "Create a simple weather app"
+}
+```
+
+`POST /code-gen/edit` updates an existing preview.
+
+```json
+{
+  "project_id": "project-uuid",
+  "message": "Make the header blue"
+}
+```
+
+The preview worker stores generated code in Postgres, allocates a Redis-backed port, connects to the configured SSH host, writes the React file, builds a Docker image, and runs the preview container.
+
+## Queues
+
+Ship forge uses BullMQ for async work.
+
+| Queue | Purpose |
+| --- | --- |
+| `intent-execution` | Classifies user intent from `/core`. |
+| `conversation-processor` | Generates streamed assistant responses. |
+| `code-execution` | Builds a new React preview. |
+| `edit-code-execution` | Updates an existing React preview. |
+
+## Auth
+
+Better Auth provides email and password auth.
+
+| Endpoint | Purpose |
+| --- | --- |
+| `POST /auth/sign-up` | Creates a user and sets auth cookies. |
+| `POST /auth/sign-in` | Signs in a user and sets auth cookies. |
+
+The `/core` flow reads the authenticated session user.
 
 ## Configuration
 
-Install dependencies and create a local environment file:
+Create a local environment file:
 
 ```bash
-pnpm install
 cp .env.example .env
 ```
 
-Required environment variables:
+Important variables:
 
 | Variable | Purpose |
 | --- | --- |
-| `OPENAI_API_KEY` | Required by current env validation. The active Vast/vLLM flow uses cookie auth, so this may be a placeholder unless the OpenAI client path is changed. |
-| `OPENAI_MODEL` | Required by current env validation. The active Vast/vLLM flow uses `VAST_MODEL`, so this may use the default placeholder. |
-| `VAST_BASE_URL` | Base URL for the OpenAI-compatible/vLLM API. It may be either the server root or a `/v1` URL. |
-| `VAST_AUTH_URL` | URL used to obtain the Vast/vLLM auth cookie. Do not commit real tokens. |
-| `VAST_MODEL` | Model name passed to the chat-completions request. |
-| `SSH_HOST` | Hostname or IP address of the remote Docker preview host. |
-| `SSH_USERNAME` | SSH username for the remote preview host. |
-| `SSH_PRIVATE_KEY_PATH` | Local filesystem path to the SSH private key used for the remote connection. |
-| `DATABASE_URL` | Postgres connection string. Docker Compose provides this for the `api` service; set it in `.env` when running the API directly with `pnpm`. |
+| `OPENAI_API_KEY` | OpenAI API key supplied by the user. |
+| `OPENAI_MODEL` | Model used for intent and conversation calls. |
+| `BETTER_AUTH_SECRET` | Better Auth signing secret. |
+| `BETTER_AUTH_URL` | Base URL used by Better Auth. |
+| `REDIS_HOST` | Redis host. |
+| `REDIS_PORT` | Redis port. |
+| `SSH_HOST` | Remote preview host or IP. |
+| `SSH_PORT` | Remote SSH port. |
+| `SSH_USERNAME` | SSH username. |
+| `SSH_PRIVATE_KEY_PATH` | Local path to the SSH private key. |
 
-Optional environment variables:
+The current env validation also requires `VAST_BASE_URL`, `VAST_AUTH_URL`, and `VAST_MODEL`. They are legacy provider settings and are not the active OpenAI path.
 
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `PORT` | `3000` | Local NestJS server port. |
-| `SSH_PORT` | `22` | SSH port on the remote preview host. |
-| `REDIS_HOST` | `127.0.0.1` | Redis host for BullMQ and the port pool. Docker Compose sets this to `redis` for the `api` service. |
-| `REDIS_PORT` | `6379` | Redis port. |
+Docker Compose supplies `DATABASE_URL` for the API container. Set it manually when running the API outside Compose.
 
-## Running Locally
+## Running locally
 
-Start local Redis and Postgres:
+Install dependencies:
+
+```bash
+pnpm install
+```
+
+Start Redis and Postgres:
 
 ```bash
 docker compose up -d redis postgres
 ```
 
-Apply the database schema:
+Apply migrations:
 
 ```bash
 pnpm run db:migrate
 ```
 
-Run the NestJS API in watch mode:
+Run the API:
 
 ```bash
 pnpm run start:dev
 ```
 
-Other useful scripts:
-
-```bash
-# one-shot development start
-pnpm run start
-
-# production build
-pnpm run build
-pnpm run start:prod
-```
-
-To run the API, Redis, and Postgres through Docker Compose:
+Run the full Compose stack:
 
 ```bash
 docker compose up --build
 ```
 
-The Compose setup mounts the SSH private key as the `azure_preview_vm_key` secret from `SSH_PRIVATE_KEY_PATH`.
+## API examples
 
-## Usage
+Sign up:
 
-Generate a new preview build:
+```bash
+curl -X POST http://127.0.0.1:3000/auth/sign-up \
+  -H "Content-Type: application/json" \
+  -d '{"name":"Demo User","email":"demo@example.com","password":"password123"}'
+```
+
+Sign in:
+
+```bash
+curl -X POST http://127.0.0.1:3000/auth/sign-in \
+  -H "Content-Type: application/json" \
+  -d '{"email":"demo@example.com","password":"password123"}'
+```
+
+Start a conversation:
+
+```bash
+curl -X POST http://127.0.0.1:3000/core \
+  -H "Content-Type: application/json" \
+  -d '{"query":"What is a React component?"}'
+```
+
+Generate a preview:
 
 ```bash
 curl -X POST http://127.0.0.1:3000/code-gen \
   -H "Content-Type: application/json" \
-  -d '{
-    "type": "init",
-    "project_name": "demo-preview",
-    "message": "Create a simple landing page for a weather app."
-  }'
+  -d '{"project_name":"demo-preview","message":"Create a calculator app"}'
 ```
 
-The response is accepted asynchronously:
+## Current limitations
 
-```json
-{
-  "jobId": "1",
-  "status": "queued"
-}
-```
+- `/core` handles instant conversation flow today.
+- Agentic code generation from `/core` is planned.
+- `/code-gen` is the current direct React preview path.
+- Preview URLs are direct HTTP URLs from the SSH host and port.
+- Remote preview hosts should be isolated and low privilege.
+- Do not commit `.env`, private keys, auth secrets, or provider keys.
 
-The current `GET /code-gen/:jobId` endpoint is a placeholder and returns a simple string. Build status and preview URLs are stored in Postgres.
+## Future direction
 
-Run a direct SSH command through the configured remote host:
+The offload path from `/core` will route to agentic React code generation.
+
+Future agents will use specialized tools for planning, editing, searching, building, and deploying React codebases.
+
+## Scripts and tests
 
 ```bash
-curl -X POST http://127.0.0.1:3000/ssh \
-  -H "Content-Type: application/json" \
-  -d '{"command": "docker --version"}'
-```
-
-Test the SSH connection:
-
-```bash
-curl http://127.0.0.1:3000/ssh
-```
-
-The previous `/llm` workflow is not the active public API path. Use `/code-gen` for preview generation.
-
-## Current Limitations and Security Notes
-
-- Never commit `.env`, private keys, auth cookies, provider tokens, or generated cookie files.
-- Rotate any real local provider token if the workspace, logs, screenshots, or backups were shared.
-- Keep `SSH_PRIVATE_KEY_PATH` pointed at a private key file outside the repository and restrict it to the local user, for example with `chmod 600`.
-- Use a dedicated low-privilege SSH user and an isolated remote VM for preview execution.
-- Generated code is built and run on the remote Docker host. Do not give that host access to sensitive production data or privileged infrastructure.
-- Preview URLs are currently direct unauthenticated HTTP URLs in the form `http://SSH_HOST:port/`.
-- Docker preview containers are currently published with Docker port bindings and may be reachable publicly unless VM firewalling blocks access.
-- Edit/rebuild port handling is still incomplete and currently has a hardcoded `3000` path.
-- Port lease ownership, cleanup, and idempotent release are known TODOs.
-
-## Tests
-
-```bash
+pnpm run build
+pnpm run start
+pnpm run start:dev
 pnpm run test
 pnpm run test:e2e
 pnpm run test:cov
+pnpm run db:migrate
+pnpm run db:rollback
+pnpm run db:codegen
 ```
