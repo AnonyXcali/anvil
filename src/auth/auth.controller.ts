@@ -8,6 +8,7 @@ import type { Response } from 'express';
 export class AuthController {
   constructor(private readonly authService: AuthService) {}
 
+  //need to support users with ssh keys specifically for them.
   @Post('/sign-up')
   @AllowAnonymous() //TODO: need to admin flow only.
   async CreateUserFlow(

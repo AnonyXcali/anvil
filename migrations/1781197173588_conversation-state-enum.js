@@ -21,6 +21,7 @@ export const up = (pgm) => {
     CREATE TABLE preview_platform.conversation (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       user_id text NOT NULL,
+      project_id UUID NOT NULL,
       state preview_platform.conversation_state default 'active',
       created_at timestamptz NOT NULL DEFAULT now(),
       updated_at timestamptz NOT NULL DEFAULT now(),
@@ -28,7 +29,12 @@ export const up = (pgm) => {
       FOREIGN KEY ("user_id")
           REFERENCES "preview_platform"."user"("id")
           ON UPDATE restrict
-          ON DELETE restrict
+          ON DELETE restrict,
+
+      FOREIGN KEY ("project_id")
+        REFERENCES "preview_platform"."project"("id")
+        ON UPDATE restrict
+        ON DELETE cascade
     );
 
     CREATE TABLE preview_platform.jobs (
@@ -44,7 +50,23 @@ export const up = (pgm) => {
         FOREIGN KEY ("conversation_id")
             REFERENCES "preview_platform"."conversation"("id")
             ON UPDATE restrict
-            ON DELETE restrict
+            ON DELETE cascade
+    );
+
+    CREATE TABLE preview_platform.project_jobs (
+        id text PRIMARY KEY NOT NULL,
+        project_id uuid NOT NULL,
+        created_at timestamptz NOT NULL DEFAULT now(),
+        updated_at timestamptz NOT NULL DEFAULT now(),
+        retries integer default 0,
+        error text,
+        state preview_platform.job_status NOT NULL default 'queued' ,
+        type text NOT NULL,
+
+        FOREIGN KEY ("project_id")
+            REFERENCES "preview_platform"."project"("id")
+            ON UPDATE restrict
+            ON DELETE cascade
     );
 
     CREATE TABLE preview_platform.message (
@@ -59,7 +81,7 @@ export const up = (pgm) => {
       FOREIGN KEY ("conversation_id")
           REFERENCES "preview_platform"."conversation"("id")
           ON UPDATE restrict
-          ON DELETE restrict
+          ON DELETE cascade
     );
 
     -- conversation updated_at trigger
@@ -76,6 +98,14 @@ export const up = (pgm) => {
     FOR EACH ROW
     EXECUTE PROCEDURE "preview_platform"."set_current_timestamp_updated_at"();
     COMMENT ON TRIGGER "set_preview_platform_jobs_updated_at" ON "preview_platform"."jobs"
+    IS 'trigger to set value of column "updated_at" to current timestamp on row update';
+
+    -- project_jobs updated_at trigger
+    CREATE TRIGGER "set_preview_platform_project_jobs_updated_at"
+    BEFORE UPDATE ON "preview_platform"."project_jobs"
+    FOR EACH ROW
+    EXECUTE PROCEDURE "preview_platform"."set_current_timestamp_updated_at"();
+    COMMENT ON TRIGGER "set_preview_platform_project_jobs_updated_at" ON "preview_platform"."project_jobs"
     IS 'trigger to set value of column "updated_at" to current timestamp on row update';
 
     -- messages updated_at trigger
@@ -99,6 +129,7 @@ export const down = (pgm) => {
     DROP TABLE IF EXISTS preview_platform.message;
     DROP TABLE IF EXISTS preview_platform.jobs;
     DROP TABLE IF EXISTS preview_platform.conversation;
+    DROP TABLE IF EXISTS preview_platform.project_jobs;
 
     DROP TYPE IF EXISTS preview_platform.job_type;
     DROP TYPE IF EXISTS preview_platform.job_status;

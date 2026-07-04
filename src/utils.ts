@@ -13,4 +13,23 @@ function extractCode_v2(input: string): string {
   return (match?.[1] ?? input).trim();
 }
 
-export { extractCode, extractCode_v2 };
+function generateKeys(conversationId: string, jobId: string) {
+  const baseKey = `conversation:${conversationId}:job:${jobId}`;
+  const seqKey = `${baseKey}:seq`;
+  const listKey = `${baseKey}:chunks`;
+  const metaKey = `${baseKey}:meta`;
+  const channelKey = conversationId;
+
+  return {
+    seqKey,
+    listKey,
+    metaKey,
+    channelKey,
+  };
+}
+
+function buildRegexPattern(patterns: string[]): string {
+  return patterns.join('|');
+}
+
+export { extractCode, extractCode_v2, generateKeys, buildRegexPattern };

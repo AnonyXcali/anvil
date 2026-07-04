@@ -22,17 +22,19 @@ export class CoreService {
     private readonly intentQueue: Queue<{
       conversation_id: string;
       query: string;
+      project_id: string;
     }>,
     private readonly channelService: ChannelsService,
   ) {}
 
-  async handleFlowInitiation(query: string, userId: string) {
+  async handleFlowInitiation(query: string, userId: string, projectId: string) {
     //create a conversation -> get conversation_id
     this.logger.log('Creating conversation id');
     const { id: conversationId } = await this.db
       .insertInto('preview_platform.conversation')
       .values({
         user_id: userId,
+        project_id: projectId,
       })
       .returning('id')
       .executeTakeFirstOrThrow();
@@ -57,6 +59,7 @@ export class CoreService {
       {
         conversation_id: conversationId,
         query,
+        project_id: projectId,
       },
       {
         attempts: 1,
@@ -75,10 +78,12 @@ export class CoreService {
       throw new Error('Job id is null');
     }
 
+    //TODO: replace with job service insert method
+
     await this.db
       .insertInto('preview_platform.jobs')
       .values({
-        id: job.id,
+        id: job.id + ':' + 'intent',
         conversation_id: conversationId,
         type: 'intent',
       })
@@ -86,32 +91,12 @@ export class CoreService {
 
     //return the conversation_id and job_id
     return {
-      job_id: job.id,
+      job_id: job.id, //TODO: remove the job_id
       conversation_id: conversationId,
     };
   }
 
-  private async getLatestJob(conversationId: string) {
-    return await this.db
-      .selectFrom('preview_platform.jobs')
-      .select(['id'])
-      .where('conversation_id', '=', conversationId)
-      .orderBy('updated_at', 'desc')
-      .limit(1)
-      .executeTakeFirst();
-  }
-
-  private constructKey(conversationId: string, jobId: string) {
-    return `conversation:${conversationId}:job:${jobId}`;
-  }
-
   handleRelay(conversationId: string) {
-    // const job = await this.getLatestJob(conversationId);
-    // if (!job || !job.id) {
-    //   throw new Error('No Job Id Found');
-    // }
-    // const channelKey = this.constructKey(conversationId, job.id);
-
     let cleanup: (() => Promise<void>) | undefined;
     return new Observable<MessageEvent>((observer) => {
       this.channelService
@@ -133,7 +118,7 @@ export class CoreService {
     await this.channelService.publish(conversationId, 'hello!');
   }
 
-  async talk(query: string, conversationId: string) {
+  async talk(query: string, conversationId: string, projectId: string) {
     this.logger.log('Storing message in db by user');
     await this.db
       .insertInto('preview_platform.message')
@@ -146,11 +131,12 @@ export class CoreService {
 
     //use the conversationId to get existing messages
     this.logger.log('Queueing job.....');
-    await this.intentQueue.add(
+    const job = await this.intentQueue.add(
       'classify-intent',
       {
         conversation_id: conversationId,
         query,
+        project_id: projectId,
       },
       {
         attempts: 1,
@@ -164,6 +150,21 @@ export class CoreService {
         },
       },
     );
+
+    if (!job.id) {
+      throw new Error('Job id is not received');
+    }
+
+    const jobId = job.id + ':' + 'intent';
+
+    await this.db
+      .insertInto('preview_platform.jobs')
+      .values({
+        id: jobId,
+        conversation_id: conversationId,
+        type: 'intent',
+      })
+      .execute();
 
     return {
       conversation_id: conversationId,

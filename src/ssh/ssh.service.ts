@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { NodeSSH } from 'node-ssh';
 import { readFileSync } from 'fs';
@@ -6,6 +6,16 @@ import { AppEnv } from '../config/env.validation';
 import { getDockerBuildCommands } from './constants/dockerBuild.constants';
 import { getDockerServeCommands } from './constants/dockerServe.constants';
 import { getScaffoldCommands } from './constants/scaffolding.constants';
+import { getDockerOperationalCommands } from './constants/dockerOperations.constants';
+import { TOOL_REQUEST_SHAPE } from 'src/anvil-agent/anvil-agent.types';
+import {
+  buildContentSearchCommand,
+  buildExpandContextCommand,
+  buildFileSearchCommand,
+} from './constants/searchToolCmds.constants';
+import { buildRegexPattern } from 'src/utils';
+import { ToolExecutionContext } from '@mastra/core/tools';
+import { StreamEventType } from 'src/anvil-agent/anvil-agent-chunk.dictionary';
 
 //TODO: move this to types
 type RemoteStepResult = {
@@ -23,6 +33,7 @@ type RemoteStepResult = {
 
 @Injectable()
 export class SshService {
+  private readonly logger = new Logger(SshService.name);
   constructor(private readonly configService: ConfigService<AppEnv, true>) {}
 
   async sshConnect() {
@@ -60,6 +71,9 @@ export class SshService {
     sshNode: NodeSSH,
     step: string,
     command: string,
+    config: {
+      allowedExitCodes?: number[];
+    } = {},
   ): Promise<RemoteStepResult> {
     console.log(`==== Executing step: ${step} ====`);
 
@@ -74,7 +88,9 @@ export class SshService {
 
     console.log(`==== Finished step: ${step} ====`, stepResult);
 
-    if (result.code !== 0) {
+    const allowedExitCodes = config.allowedExitCodes ?? [0];
+
+    if (!allowedExitCodes.includes(result.code ?? 0)) {
       throw new Error(
         [
           `Step failed: ${step}`,
@@ -135,6 +151,40 @@ export class SshService {
     }
   }
 
+  async previewBuild(
+    port: number,
+    imageName: string,
+    containerName: string,
+    projectId: string,
+  ) {
+    const sshNode = new NodeSSH();
+    const steps: RemoteStepResult[] = [];
+    const workspaceDir = `/mnt/preview-data/preview-platform/workspaces/${projectId}`;
+
+    try {
+      await sshNode.connect({
+        host: process.env.SSH_HOST!,
+        port: Number(process.env.SSH_PORT ?? 22),
+        username: process.env.SSH_USERNAME!,
+        privateKey: readFileSync(process.env.SSH_PRIVATE_KEY_PATH!, 'utf8'),
+      });
+      steps.push(...(await this.scaffolding(sshNode, workspaceDir)));
+
+      steps.push(
+        ...(await this.dockerServe(
+          sshNode,
+          workspaceDir,
+          imageName,
+          containerName,
+          port,
+        )),
+      );
+      return steps;
+    } finally {
+      sshNode.dispose();
+    }
+  }
+
   async runnerBuild(
     port: number,
     appTsx: string,
@@ -163,6 +213,7 @@ export class SshService {
           `cat > "${workspaceDir}/src/App.tsx" <<'EOF'
 ${appTsx}
 EOF`,
+          {},
         ),
       );
 
@@ -201,11 +252,12 @@ EOF`,
         sshNode,
         'create-dockerfile',
         commands.createDockerfile,
+        {},
       ),
     );
 
     steps.push(
-      await this.runStep(sshNode, 'verify-files', commands.verifyFiles),
+      await this.runStep(sshNode, 'verify-files', commands.verifyFiles, {}),
     );
 
     steps.push(
@@ -213,6 +265,7 @@ EOF`,
         sshNode,
         'docker-build-image',
         commands.dockerBuildImage,
+        {},
       ),
     );
 
@@ -221,6 +274,7 @@ EOF`,
         sshNode,
         'remove-old-container',
         commands.removeOldContainer,
+        {},
       ),
     );
 
@@ -229,6 +283,7 @@ EOF`,
         sshNode,
         'run-preview-container',
         commands.runPreviewContainer,
+        {},
       ),
     );
 
@@ -256,11 +311,12 @@ EOF`,
         sshNode,
         'create-dockerfile',
         commands.createDockerfile,
+        {},
       ),
     );
 
     steps.push(
-      await this.runStep(sshNode, 'verify-files', commands.verifyFiles),
+      await this.runStep(sshNode, 'verify-files', commands.verifyFiles, {}),
     );
 
     steps.push(
@@ -268,6 +324,7 @@ EOF`,
         sshNode,
         'build-preview-image',
         commands.buildPreviewImage,
+        {},
       ),
     );
 
@@ -276,6 +333,7 @@ EOF`,
         sshNode,
         'remove-existing-container',
         commands.removeExistingContainer,
+        {},
       ),
     );
 
@@ -284,11 +342,17 @@ EOF`,
         sshNode,
         'run-preview-container',
         commands.runPreviewContainer,
+        {},
       ),
     );
 
     steps.push(
-      await this.runStep(sshNode, 'preview-url-log', commands.previewUrlLog),
+      await this.runStep(
+        sshNode,
+        'preview-url-log',
+        commands.previewUrlLog,
+        {},
+      ),
     );
 
     return steps;
@@ -304,6 +368,7 @@ EOF`,
         sshNode,
         'create-workspace',
         commands.copyTemplateProject,
+        {},
       ),
     );
 
@@ -341,6 +406,7 @@ EOF`,
           `cat > "${baseDir}/src/App.tsx" <<'EOF'
 ${appTsx}
 EOF`,
+          {},
         ),
       );
 
@@ -393,6 +459,7 @@ EOF`,
           `cat > "${baseDir}/src/App.tsx" <<'EOF'
 ${appTsx}
 EOF`,
+          {},
         ),
       );
 
@@ -420,8 +487,266 @@ EOF`,
         sshNode,
         'read-file',
         `cat ../../mnt/preview-data/preview-platform/builds/${buildId}/src/App.tsx`,
+        {},
+      );
+
+      if (result.code !== 0) {
+        throw new Error('Container could not be stopped due to an error');
+      }
+
+      return result.stdout;
+    } finally {
+      sshNode.dispose();
+    }
+  }
+
+  async stopPreviewContainer(containerName: string) {
+    const sshNode = new NodeSSH();
+
+    try {
+      await sshNode.connect({
+        host: process.env.SSH_HOST!,
+        port: Number(process.env.SSH_PORT ?? 22),
+        username: process.env.SSH_USERNAME!,
+        privateKey: readFileSync(process.env.SSH_PRIVATE_KEY_PATH!, 'utf8'),
+      });
+
+      const commands = getDockerOperationalCommands(containerName);
+
+      const result = await this.runStep(
+        sshNode,
+        'stop-preview-container',
+        commands.stopPreviewContainer,
+        {},
       );
       return result.stdout;
+    } finally {
+      sshNode.dispose();
+    }
+  }
+
+  async startPreviewContainer(containerName: string) {
+    const sshNode = new NodeSSH();
+
+    try {
+      await sshNode.connect({
+        host: process.env.SSH_HOST!,
+        port: Number(process.env.SSH_PORT ?? 22),
+        username: process.env.SSH_USERNAME!,
+        privateKey: readFileSync(process.env.SSH_PRIVATE_KEY_PATH!, 'utf8'),
+      });
+
+      const commands = getDockerOperationalCommands(containerName);
+
+      const result = await this.runStep(
+        sshNode,
+        'stop-preview-container',
+        commands.startPreviewContainer,
+        {},
+      );
+      return result.stdout;
+    } finally {
+      sshNode.dispose();
+    }
+  }
+
+  async searchFile(
+    request: TOOL_REQUEST_SHAPE,
+    projectId: string,
+    context: ToolExecutionContext,
+  ) {
+    const sshNode = new NodeSSH();
+    const steps: RemoteStepResult[] = [];
+    const baseDir = `/mnt/preview-data/preview-platform/workspaces/${projectId}`;
+
+    try {
+      await sshNode.connect({
+        host: process.env.SSH_HOST!,
+        port: Number(process.env.SSH_PORT ?? 22),
+        username: process.env.SSH_USERNAME!,
+        privateKey: readFileSync(process.env.SSH_PRIVATE_KEY_PATH!, 'utf8'),
+      });
+
+      if (!projectId) {
+        throw new Error('Project ID is not provided');
+      }
+
+      if (!request.query.keyword) {
+        throw new Error('No keywords for file search provided');
+      }
+
+      const pattern = buildRegexPattern(request.query.keyword);
+
+      const command = buildFileSearchCommand({
+        pattern,
+        workspacePath: baseDir,
+      });
+
+      await context?.writer?.custom({
+        type: StreamEventType.SEARCH_TOOL_FILE_SEARCH_LOG,
+        data: { line: `Searching for ${pattern} in ${baseDir}..` },
+        transient: true,
+      });
+
+      steps.push(
+        await this.runStep(sshNode, 'search-tool-search-files', command, {
+          allowedExitCodes: [0, 1],
+        }),
+      );
+
+      return steps;
+    } catch (e: unknown) {
+      this.logger.fatal('SEARCH TOOL FAILED');
+      if (e instanceof Error) {
+        this.logger.error(e.name);
+        this.logger.error(e.message);
+      }
+      throw e;
+    } finally {
+      sshNode.dispose();
+    }
+  }
+
+  async searchContent(
+    request: TOOL_REQUEST_SHAPE,
+    projectId: string,
+    context: ToolExecutionContext,
+  ) {
+    const sshNode = new NodeSSH();
+    const steps: RemoteStepResult[] = [];
+    const baseDir = `/mnt/preview-data/preview-platform/workspaces/${projectId}`;
+
+    try {
+      await sshNode.connect({
+        host: process.env.SSH_HOST!,
+        port: Number(process.env.SSH_PORT ?? 22),
+        username: process.env.SSH_USERNAME!,
+        privateKey: readFileSync(process.env.SSH_PRIVATE_KEY_PATH!, 'utf8'),
+      });
+
+      if (!projectId) {
+        throw new Error('Project ID is not provided');
+      }
+
+      if (!request.query.keyword) {
+        throw new Error('No keywords for content search provided');
+      }
+
+      if (
+        !request.query.files_paths_for_content_search ||
+        request.query.files_paths_for_content_search.length <= 0
+      ) {
+        throw new Error('No files for content search provided');
+      }
+
+      const pattern = buildRegexPattern(request.query.keyword);
+
+      const filesSearchSpace = request.query.files_paths_for_content_search;
+
+      await context?.writer?.custom({
+        type: StreamEventType.SEARCH_TOOL_CONTENT_SEARCH_LOG,
+        data: {
+          line: `Searching for ${pattern} in ${baseDir}.., within ${filesSearchSpace.join(' ')}`,
+        },
+        transient: true,
+      });
+
+      const command = buildContentSearchCommand({
+        pattern,
+        workspacePath: baseDir,
+        files: filesSearchSpace,
+      });
+
+      steps.push(
+        await this.runStep(sshNode, 'search-tool-content-search', command, {
+          allowedExitCodes: [0, 1],
+        }),
+      );
+
+      return steps;
+    } catch (e: unknown) {
+      this.logger.fatal('CONTENT SEARCH TOOL FAILED');
+      if (e instanceof Error) {
+        this.logger.error(e.name);
+        this.logger.error(e.message);
+      }
+      throw e;
+    } finally {
+      sshNode.dispose();
+    }
+  }
+
+  async expandFiles(
+    request: TOOL_REQUEST_SHAPE,
+    projectId: string,
+    context: ToolExecutionContext,
+  ) {
+    const sshNode = new NodeSSH();
+    const steps: RemoteStepResult[] = [];
+    const baseDir = `/mnt/preview-data/preview-platform/workspaces/${projectId}`;
+
+    try {
+      await sshNode.connect({
+        host: process.env.SSH_HOST!,
+        port: Number(process.env.SSH_PORT ?? 22),
+        username: process.env.SSH_USERNAME!,
+        privateKey: readFileSync(process.env.SSH_PRIVATE_KEY_PATH!, 'utf8'),
+      });
+
+      if (!projectId) {
+        throw new Error('Project ID is not provided');
+      }
+
+      if (!request.query.files_path_for_expansion) {
+        throw new Error('No file for expansive search provided');
+      }
+
+      if (
+        !request.query.files_path_for_expansion.ranges ||
+        request.query.files_path_for_expansion.ranges.length <= 0
+      ) {
+        throw new Error('File ranges are not provided');
+      }
+
+      //TODO: need to support multiple range
+      const start = request.query.files_path_for_expansion.ranges[0].startLine;
+      const end = request.query.files_path_for_expansion.ranges[0].endLine;
+      const fileSearchSpace = request.query.files_path_for_expansion.file_name;
+
+      const command = buildExpandContextCommand({
+        workspacePath: baseDir,
+        file: fileSearchSpace,
+        range: {
+          start,
+          end,
+        },
+      });
+
+      await context?.writer?.custom({
+        type: StreamEventType.SEARCH_TOOL_EXPANSIVE_SEARCH_LOG,
+        data: {
+          line: `Searching in ${fileSearchSpace} with range ${start} : ${end}`,
+        },
+        transient: true,
+      });
+
+      steps.push(
+        await this.runStep(
+          sshNode,
+          'search-tool-expansive-search',
+          command,
+          {},
+        ),
+      );
+
+      return steps;
+    } catch (e: unknown) {
+      this.logger.fatal('EXPANSE TOOL FAILED');
+      if (e instanceof Error) {
+        this.logger.error(e.name);
+        this.logger.error(e.message);
+      }
+      throw e;
     } finally {
       sshNode.dispose();
     }

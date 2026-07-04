@@ -15,25 +15,11 @@ import { ChannelsModule } from './channels/channels.module';
 import { SharedredisModule } from './sharedredis/sharedredis.module';
 import { IntentModule } from './intent/intent.module';
 import { ConversationModule } from './conversation/conversation.module';
-import { StorageModule } from './storage/storage.module';
 import { JobModule } from './job/job.module';
+import { ProjectModule } from './project/project.module';
+import { AnvilAgentModule } from './anvil-agent/anvil-agent.module';
+import { MastraSharedModule } from './mastra/mastra-shared.module';
 
-/**
- * Fix update flow [DONE]
- * Need to work on statuses for the preview flow, build flow
- * Need to work on the code loop generation.
- * Multi folder generation.
- * A user can:
- * 1. Create a project from a prompt.
- * 2. Receive projectId/buildId/jobId.
- * 3. Poll build status.
- * 4. Open dynamic preview URL.
- * 5. Send edit request using projectId.
- * 6. System loads App.tsx from DB.
- * 7. LLM updates App.tsx.
- * 8. System rebuilds preview on dynamic port.
- * 9. Build logs/status/preview URL are stored in DB.
- **/
 @Module({
   imports: [
     BullModule.forRoot({
@@ -59,8 +45,10 @@ import { JobModule } from './job/job.module';
     SharedredisModule,
     IntentModule,
     ConversationModule,
-    StorageModule,
     JobModule,
+    ProjectModule,
+    AnvilAgentModule,
+    MastraSharedModule,
   ],
   controllers: [AppController],
   providers: [AppService],

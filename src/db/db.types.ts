@@ -27,7 +27,11 @@ export type PreviewPlatformConversationState = "active" | "awaiting_response" | 
 
 export type PreviewPlatformJobStatus = "active" | "completed" | "failed" | "queued";
 
+export type PreviewPlatformProjectStatus = "active" | "errored" | "processing" | "stopped";
+
 export type PreviewPlatformRole = "assistant" | "system" | "tool" | "user";
+
+export type PreviewPlatformTemplates = "react";
 
 export type Timestamp = ColumnType<Date, Date | string, Date | string>;
 
@@ -56,6 +60,7 @@ export interface PreviewPlatformAccount {
 export interface PreviewPlatformConversation {
   created_at: Generated<Timestamp>;
   id: Generated<string>;
+  project_id: string;
   state: Generated<PreviewPlatformConversationState | null>;
   updated_at: Generated<Timestamp>;
   user_id: string;
@@ -84,12 +89,15 @@ export interface PreviewPlatformMessage {
 
 export interface PreviewPlatformProject {
   active_port: number | null;
+  container_name: string | null;
   created_at: Generated<Timestamp>;
   id: Generated<string>;
   name: string;
   preview_url: string | null;
-  status: Generated<string>;
+  status: Generated<PreviewPlatformProjectStatus>;
+  template: Generated<PreviewPlatformTemplates | null>;
   updated_at: Generated<Timestamp>;
+  user_id: string;
 }
 
 export interface PreviewPlatformProjectBuild {
@@ -115,6 +123,17 @@ export interface PreviewPlatformProjectFile {
   id: Generated<string>;
   path: string;
   project_id: string;
+  updated_at: Generated<Timestamp>;
+}
+
+export interface PreviewPlatformProjectJobs {
+  created_at: Generated<Timestamp>;
+  error: string | null;
+  id: string;
+  project_id: string;
+  retries: Generated<number | null>;
+  state: Generated<PreviewPlatformJobStatus>;
+  type: string;
   updated_at: Generated<Timestamp>;
 }
 
@@ -157,6 +176,7 @@ export interface DB {
   "preview_platform.project": PreviewPlatformProject;
   "preview_platform.project_build": PreviewPlatformProjectBuild;
   "preview_platform.project_file": PreviewPlatformProjectFile;
+  "preview_platform.project_jobs": PreviewPlatformProjectJobs;
   "preview_platform.session": PreviewPlatformSession;
   "preview_platform.user": PreviewPlatformUser;
   "preview_platform.verification": PreviewPlatformVerification;

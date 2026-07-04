@@ -26,46 +26,9 @@ export const up = (pgm) => {
     END;
     $$ LANGUAGE plpgsql;
 
-    CREATE TABLE IF NOT EXISTS preview_platform.project (
-      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      name TEXT NOT NULL,
-      status TEXT NOT NULL DEFAULT 'active',
-      active_port INTEGER,
-      preview_url TEXT,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
-    );
+    CREATE TYPE preview_platform.project_status as ENUM ('active', 'processing', 'stopped', 'errored');
 
-    CREATE TABLE IF NOT EXISTS preview_platform.project_file (
-      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      project_id UUID NOT NULL
-        REFERENCES preview_platform.project(id)
-        ON DELETE CASCADE,
-      path TEXT NOT NULL,
-      content TEXT NOT NULL,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-      UNIQUE (project_id, path)
-    );
-
-    CREATE TABLE IF NOT EXISTS preview_platform.project_build (
-      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      project_id UUID NOT NULL
-        REFERENCES preview_platform.project(id)
-        ON DELETE CASCADE,
-      job_id TEXT,
-      status TEXT NOT NULL DEFAULT 'queued',
-      host_port INTEGER NOT NULL,
-      artifact_url TEXT,
-      container_name TEXT,
-      image_name TEXT,
-      logs JSONB,
-      error TEXT,
-      started_at TIMESTAMPTZ,
-      completed_at TIMESTAMPTZ,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
-    );
+    CREATE TYPE preview_platform.templates as ENUM ('react');
 
     CREATE TABLE IF NOT EXISTS preview_platform."user" (
       "id" text not null primary key,
@@ -121,6 +84,56 @@ export const up = (pgm) => {
 
     CREATE INDEX IF NOT EXISTS "verification_identifier_idx"
       ON preview_platform."verification" ("identifier");
+
+    CREATE TABLE IF NOT EXISTS preview_platform.project (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      name TEXT NOT NULL,
+      status preview_platform.project_status NOT NULL DEFAULT 'active',
+      template preview_platform.templates default 'react',
+      user_id text NOT NULL,
+      active_port INTEGER,
+      container_name text,
+      preview_url TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+      FOREIGN KEY ("user_id")
+          REFERENCES "preview_platform"."user"("id")
+          ON UPDATE restrict
+          ON DELETE restrict
+    );
+
+    -- TODO: deprecate preview_platform.project_file
+    CREATE TABLE IF NOT EXISTS preview_platform.project_file (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      project_id UUID NOT NULL
+        REFERENCES preview_platform.project(id)
+        ON DELETE CASCADE,
+      path TEXT NOT NULL,
+      content TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      UNIQUE (project_id, path)
+    );
+
+    CREATE TABLE IF NOT EXISTS preview_platform.project_build (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      project_id UUID NOT NULL
+        REFERENCES preview_platform.project(id)
+        ON DELETE CASCADE,
+      job_id TEXT,
+      status TEXT NOT NULL DEFAULT 'queued',
+      host_port INTEGER NOT NULL,
+      artifact_url TEXT,
+      container_name TEXT,
+      image_name TEXT,
+      logs JSONB,
+      error TEXT,
+      started_at TIMESTAMPTZ,
+      completed_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
 
     -- project updated_at trigger
     CREATE TRIGGER "set_preview_platform_project_updated_at"

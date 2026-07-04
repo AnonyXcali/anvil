@@ -30,6 +30,8 @@ services:
       SSH_PORT: ${SSH_PORT}
       SSH_USERNAME: ${SSH_USERNAME}
       SSH_PRIVATE_KEY_PATH: /run/secrets/azure_preview_vm_key
+      MASTRA_PLATFORM_ACCESS_TOKEN: ${MASTRA_PLATFORM_ACCESS_TOKEN}
+      MASTRA_PROJECT_ID: ${MASTRA_PROJECT_ID}
     secrets:
       - azure_preview_vm_key
     depends_on:

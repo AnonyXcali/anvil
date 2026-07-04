@@ -8,6 +8,8 @@ import { LlmModule } from '../llm/llm.module';
 import { DbModule } from '../db/db.module';
 import { PortModule } from '../ssh/port.module';
 import { CodeGenEditProcessor } from './code-gen-edit.processor';
+import { ChannelsModule } from 'src/channels/channels.module';
+import { JobModule } from 'src/job/job.module';
 
 /**
  * POST /projects/:projectId/messages
@@ -33,6 +35,8 @@ import { CodeGenEditProcessor } from './code-gen-edit.processor';
     SshModule,
     LlmModule,
     DbModule,
+    ChannelsModule,
+    JobModule,
     BullModule.registerQueue({
       name: 'code-execution',
     }),
@@ -42,5 +46,6 @@ import { CodeGenEditProcessor } from './code-gen-edit.processor';
   ],
   providers: [CodeGenService, CodeGenProcessor, CodeGenEditProcessor],
   controllers: [CodeGenController],
+  exports: [CodeGenService],
 })
 export class CodeGenModule {}
