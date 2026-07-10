@@ -1,3 +1,5 @@
+![Anvil banner](docs/assets/anvil-banner.png)
+
 # ANVIL
 
 ## Description
