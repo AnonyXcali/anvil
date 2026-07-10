@@ -1,221 +1,34 @@
-# Ship forge
+# ANVIL
 
-Ship forge is a NestJS backend for AI conversations and React preview generation.
+## Description
 
-The main flow lives in [`src/core/`](src/core/). It creates authenticated conversations, classifies user intent, queues background work, and streams model responses back to the client.
+Anvil(earlier known as Ship Forge) is a NestJS backend for authenticated AI conversations, agentic project work, and React preview sandboxes.
 
-## What it does
+It uses Better Auth, OpenAI, BullMQ, Redis, Postgres, Mastra agents, and SSH-backed Docker previews.
 
-- Runs authenticated AI conversations with Better Auth sessions.
-- Uses OpenAI with bring-your-own-key support through `.env`.
-- Streams assistant responses with Redis Pub/Sub and Server-Sent Events.
-- Stores users, conversations, messages, jobs, projects, and generated files in Postgres.
-- Supports direct React `src/App.tsx` preview generation on a user-provided SSH host.
-- Uses BullMQ queues for long-running work.
+## Architecture Description
 
-## Main architecture
+The main user flow starts with a project workspace. A project owns its conversation, generated files, active preview port, container state, and job history.
 
-- `CoreModule`: starts and continues user conversations.
-- `IntentModule`: classifies each user request as instant or offloaded work.
-- `ConversationModule`: handles normal model responses.
-- `LlmModule`: wraps OpenAI calls.
-- `ChannelsModule`: streams response chunks over Redis and SSE.
-- `CodeGenModule`: generates and edits React previews.
-- `SshModule`: writes files and runs Docker previews on a remote host.
-- `AuthModule`: handles Better Auth sign-up and sign-in.
+`src/core/` receives user messages, classifies intent, and routes work to either normal conversation handling or the agentic offload path. Long-running work runs through BullMQ queues. Redis powers queueing and Server-Sent Events, while Postgres stores users, projects, conversations, messages, jobs, and generated files.
 
-## Core flow
+Preview work is executed on a configured SSH host. The backend writes React files into a project-specific workspace, builds Docker previews, and controls project containers through start and stop jobs.
 
-`POST /core` starts a new authenticated conversation.
+## Agentic Capabilities
 
-```json
-{
-  "query": "Explain how React state works"
-}
-```
+- Authenticated conversations: runs session-aware chat flows through `/core`.
+- Intent routing: classifies requests as instant responses or offloaded project work.
+- Streaming responses: publishes model and agent output over Redis-backed SSE channels.
+- Project workspaces: creates isolated project records and remote workspace folders for generated previews.
+- React preview generation: creates and edits `src/App.tsx` for Vite React previews.
+- Anvil agent flow: uses a Mastra agent to inspect project context and produce precise change instructions.
+- Search tools: lets the Anvil agent search files and content inside the project workspace.
+- Preview lifecycle control: starts, stops, tracks, and updates project preview containers.
 
-Response:
+## Future plans
 
-```json
-{
-  "job_id": "1",
-  "conversation_id": "conversation-uuid"
-}
-```
-
-`POST /core/talk` adds a message to an existing conversation.
-
-```json
-{
-  "query": "Can you explain that with an example?",
-  "conversation_id": "conversation-uuid"
-}
-```
-
-`GET /core/:conversation_id` opens the SSE stream for model chunks.
-
-## Code generation flow
-
-`POST /code-gen` creates a React preview by generating `src/App.tsx`.
-
-```json
-{
-  "project_name": "demo-preview",
-  "message": "Create a simple weather app"
-}
-```
-
-`POST /code-gen/edit` updates an existing preview.
-
-```json
-{
-  "project_id": "project-uuid",
-  "message": "Make the header blue"
-}
-```
-
-The preview worker stores generated code in Postgres, allocates a Redis-backed port, connects to the configured SSH host, writes the React file, builds a Docker image, and runs the preview container.
-
-## Queues
-
-Ship forge uses BullMQ for async work.
-
-| Queue | Purpose |
-| --- | --- |
-| `intent-execution` | Classifies user intent from `/core`. |
-| `conversation-processor` | Generates streamed assistant responses. |
-| `code-execution` | Builds a new React preview. |
-| `edit-code-execution` | Updates an existing React preview. |
-
-## Auth
-
-Better Auth provides email and password auth.
-
-| Endpoint | Purpose |
-| --- | --- |
-| `POST /auth/sign-up` | Creates a user and sets auth cookies. |
-| `POST /auth/sign-in` | Signs in a user and sets auth cookies. |
-
-The `/core` flow reads the authenticated session user.
-
-## Configuration
-
-Create a local environment file:
-
-```bash
-cp .env.example .env
-```
-
-Important variables:
-
-| Variable | Purpose |
-| --- | --- |
-| `OPENAI_API_KEY` | OpenAI API key supplied by the user. |
-| `OPENAI_MODEL` | Model used for intent and conversation calls. |
-| `BETTER_AUTH_SECRET` | Better Auth signing secret. |
-| `BETTER_AUTH_URL` | Base URL used by Better Auth. |
-| `REDIS_HOST` | Redis host. |
-| `REDIS_PORT` | Redis port. |
-| `SSH_HOST` | Remote preview host or IP. |
-| `SSH_PORT` | Remote SSH port. |
-| `SSH_USERNAME` | SSH username. |
-| `SSH_PRIVATE_KEY_PATH` | Local path to the SSH private key. |
-
-The current env validation also requires `VAST_BASE_URL`, `VAST_AUTH_URL`, and `VAST_MODEL`. They are legacy provider settings and are not the active OpenAI path.
-
-Docker Compose supplies `DATABASE_URL` for the API container. Set it manually when running the API outside Compose.
-
-## Running locally
-
-Install dependencies:
-
-```bash
-pnpm install
-```
-
-Start Redis and Postgres:
-
-```bash
-docker compose up -d redis postgres
-```
-
-Apply migrations:
-
-```bash
-pnpm run db:migrate
-```
-
-Run the API:
-
-```bash
-pnpm run start:dev
-```
-
-Run the full Compose stack:
-
-```bash
-docker compose up --build
-```
-
-## API examples
-
-Sign up:
-
-```bash
-curl -X POST http://127.0.0.1:3000/auth/sign-up \
-  -H "Content-Type: application/json" \
-  -d '{"name":"Demo User","email":"demo@example.com","password":"password123"}'
-```
-
-Sign in:
-
-```bash
-curl -X POST http://127.0.0.1:3000/auth/sign-in \
-  -H "Content-Type: application/json" \
-  -d '{"email":"demo@example.com","password":"password123"}'
-```
-
-Start a conversation:
-
-```bash
-curl -X POST http://127.0.0.1:3000/core \
-  -H "Content-Type: application/json" \
-  -d '{"query":"What is a React component?"}'
-```
-
-Generate a preview:
-
-```bash
-curl -X POST http://127.0.0.1:3000/code-gen \
-  -H "Content-Type: application/json" \
-  -d '{"project_name":"demo-preview","message":"Create a calculator app"}'
-```
-
-## Current limitations
-
-- `/core` handles instant conversation flow today.
-- Agentic code generation from `/core` is planned.
-- `/code-gen` is the current direct React preview path.
-- Preview URLs are direct HTTP URLs from the SSH host and port.
-- Remote preview hosts should be isolated and low privilege.
-- Do not commit `.env`, private keys, auth secrets, or provider keys.
-
-## Future direction
-
-The offload path from `/core` will route to agentic React code generation.
-
-Future agents will use specialized tools for planning, editing, searching, building, and deploying React codebases.
-
-## Scripts and tests
-
-```bash
-pnpm run build
-pnpm run start
-pnpm run start:dev
-pnpm run test
-pnpm run test:e2e
-pnpm run test:cov
-pnpm run db:migrate
-pnpm run db:rollback
-pnpm run db:codegen
-```
+- Route more `/core` offload requests into full agentic React code generation.
+- Expand the Anvil agent from search-and-instruct flows into direct multi-file editing.
+- Add stronger preview isolation, authenticated preview URLs, and production-safe routing.
+- Improve project job tracking and frontend polling around long-running work.
+- Grow specialized tools for planning, editing, testing, building, and deploying generated apps.
