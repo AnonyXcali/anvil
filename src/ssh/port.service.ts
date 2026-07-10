@@ -25,6 +25,12 @@ export class PortService implements OnModuleInit {
   async releasePort(port: number): Promise<void> {
     // TODO(security): Make release idempotent and ownership-aware before returning ports
     // to the shared pool to prevent duplicate allocations and cross-project routing.
-    await this.redis.rpush('available_ports', port);
+    try {
+      await this.redis.rpush('available_ports', port);
+    } catch (e: unknown) {
+      if (e instanceof Error) {
+        throw new Error(e.message);
+      }
+    }
   }
 }

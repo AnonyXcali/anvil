@@ -5,6 +5,7 @@ import { LlmService } from 'src/llm/llm.service';
 import { ConversationService } from 'src/conversation/conversation.service';
 import { IntentService } from './intent.service';
 import { JobService } from 'src/job/job.service';
+import { AnvilAgentService } from 'src/anvil-agent/anvil-agent.service';
 
 @Processor('intent-execution', {
   concurrency: 1,
@@ -17,6 +18,7 @@ export class IntentProcessor extends WorkerHost {
     private readonly conversationService: ConversationService,
     private readonly intentService: IntentService,
     private readonly jobService: JobService,
+    private readonly anvilAgentService: AnvilAgentService,
   ) {
     super();
   }
@@ -39,6 +41,11 @@ export class IntentProcessor extends WorkerHost {
       );
     } else if (intent === 'offload') {
       //this flow would go to the code-gen or offload module (yet to decide)
+      await this.anvilAgentService.anvilAgentQueue(
+        job.data.conversation_id,
+        job.data.query,
+        job.data.project_id,
+      );
     }
 
     await job.updateProgress(100);
@@ -53,7 +60,7 @@ export class IntentProcessor extends WorkerHost {
   async handleActive(job: INTENT_JOB) {
     if (job.id) {
       await this.jobService.updateJobStatus(
-        job.id,
+        job.id + ':' + 'intent',
         job.data.conversation_id,
         'active',
         'intent',
@@ -66,7 +73,7 @@ export class IntentProcessor extends WorkerHost {
     if (!job.id) return;
 
     await this.jobService.updateJobStatus(
-      job.id,
+      job.id + ':' + 'intent',
       job.data.conversation_id,
       'completed',
       'intent',
@@ -82,7 +89,7 @@ export class IntentProcessor extends WorkerHost {
       return;
     }
     await this.jobService.updateJobStatus(
-      job.id,
+      job.id + ':' + 'intent',
       job.data.conversation_id,
       'failed',
       'intent',

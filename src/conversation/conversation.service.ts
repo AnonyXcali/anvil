@@ -54,10 +54,12 @@ export class ConversationService implements Conversation {
       throw new Error('Job id is null');
     }
 
+    const jobId = job.id + ':' + 'conversation';
+
     await this.db
       .insertInto('preview_platform.jobs')
       .values({
-        id: job.id,
+        id: jobId,
         conversation_id: conversationId,
         type: 'conversation',
       })

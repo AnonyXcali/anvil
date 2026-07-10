@@ -11,6 +11,7 @@ import {
 import { ChannelsService } from 'src/channels/channels.service';
 import { KYSELY_DB } from 'src/tokens';
 import { Messages } from 'src/types/types';
+import { generateKeys } from 'src/utils';
 
 //TODO: this would evolve with rest of the scaffolding
 const SYSTEM_PROMPT = `
@@ -172,11 +173,10 @@ export class LlmService implements OnModuleInit {
     this.logger.log('Query:' + query);
     let constructedMessage = '';
 
-    const baseKey = `conversation:${channelId}:job:${jobId}`;
-    const seqKey = `${baseKey}:seq`;
-    const listKey = `${baseKey}:chunks`;
-    const metaKey = `${baseKey}:meta`;
-    const channelKey = channelId;
+    const { seqKey, listKey, metaKey, channelKey } = generateKeys(
+      channelId,
+      jobId,
+    );
 
     this.logger.log('=========MESSAGES FOR LLM===============');
     this.logger.log(messages);

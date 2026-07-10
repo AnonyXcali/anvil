@@ -1,34 +1,19 @@
 import { InjectQueue } from '@nestjs/bullmq';
-import { Injectable } from '@nestjs/common';
+import { Injectable, Inject } from '@nestjs/common';
 import { Queue } from 'bullmq';
 import { DbService } from '../db/db.service';
 import { PortService } from '../ssh/port.service';
-
-/**
- * Controller
- *   -> CodeGenService
- *     -> create project row
- *     -> create message row
- *     -> call LLM
- *     -> store App.tsx in DB
- *     -> create project_build row
- *     -> enqueue BullMQ job
- *
- * Worker
- *   -> load App.tsx from DB
- *   -> scaffold files
- *   -> SSH to VM
- *   -> build Docker image
- *   -> run container
- *   -> update project_build
- */
+import { KYSELY_DB } from 'src/tokens';
+import { Kysely } from 'kysely';
+import { DB } from 'src/db/db.types';
+import { JobService } from 'src/job/job.service';
 
 @Injectable()
 export class CodeGenService {
   constructor(
     @InjectQueue('code-execution')
     private readonly queue: Queue<{
-      message: string;
+      conversationId: string;
       projectId: string;
       port: number;
     }>,
@@ -40,7 +25,39 @@ export class CodeGenService {
     }>,
     private readonly dbService: DbService,
     private readonly portService: PortService,
+    @Inject(KYSELY_DB) private readonly db: Kysely<DB>,
+    private readonly jobService: JobService,
   ) {}
+
+  async enqueueJob(projectId: string, port: number, conversationId: string) {
+    const job = await this.queue.add(
+      'scaffold-project',
+      {
+        conversationId,
+        projectId,
+        port,
+      },
+      {
+        attempts: 1,
+        removeOnComplete: {
+          age: 60 * 60,
+          count: 100,
+        },
+        removeOnFail: {
+          age: 24 * 60 * 60,
+          count: 100,
+        },
+      },
+    );
+
+    if (!job.id) {
+      throw new Error('No Job ID Found for updating');
+    }
+
+    const jobId = job.id + ':' + 'scaffold-project';
+
+    await this.jobService.insert(jobId, conversationId, 'scaffold-project');
+  }
 
   async enqueue(message: string, projectName: string) {
     //acquire port
@@ -70,7 +87,7 @@ export class CodeGenService {
     const job = await this.queue.add(
       'run-code',
       {
-        message,
+        conversationId: '',
         projectId: db.rows[0].id,
         port,
       },

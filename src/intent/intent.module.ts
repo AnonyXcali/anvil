@@ -5,9 +5,16 @@ import { ConversationModule } from 'src/conversation/conversation.module';
 import { DbModule } from 'src/db/db.module';
 import { IntentService } from './intent.service';
 import { JobModule } from 'src/job/job.module';
+import { AnvilAgentModule } from 'src/anvil-agent/anvil-agent.module';
 
 @Module({
-  imports: [LlmModule, ConversationModule, DbModule, JobModule],
+  imports: [
+    LlmModule,
+    ConversationModule,
+    DbModule,
+    JobModule,
+    AnvilAgentModule,
+  ],
   providers: [IntentProcessor, IntentService],
 })
 export class IntentModule {}

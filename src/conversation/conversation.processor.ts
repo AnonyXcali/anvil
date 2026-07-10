@@ -50,7 +50,7 @@ export class ConversationProcessor extends WorkerHost {
     }
 
     await this.jobService.updateJobStatus(
-      job.id,
+      job.id + ':' + 'conversation',
       job.data.conversation_id,
       'active',
       'conversation',
@@ -74,7 +74,7 @@ export class ConversationProcessor extends WorkerHost {
     }
 
     await this.jobService.updateJobStatus(
-      job.id,
+      job.id + ':' + 'conversation',
       conversationId,
       'completed',
       'conversation',
@@ -90,7 +90,7 @@ export class ConversationProcessor extends WorkerHost {
       return;
     }
     await this.jobService.updateJobStatus(
-      job.id,
+      job.id + ':' + 'conversation',
       job.data.conversation_id,
       'failed',
       'conversation',
