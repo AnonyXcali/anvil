@@ -8,7 +8,7 @@ services:
     ports:
       - '3000:3000'
     environment:
-      NODE_ENV: production
+      NODE_ENV: development
       PORT: 3000
 
       OPENAI_API_KEY: ${OPENAI_API_KEY}
@@ -32,6 +32,7 @@ services:
       SSH_PRIVATE_KEY_PATH: /run/secrets/azure_preview_vm_key
       MASTRA_PLATFORM_ACCESS_TOKEN: ${MASTRA_PLATFORM_ACCESS_TOKEN}
       MASTRA_PROJECT_ID: ${MASTRA_PROJECT_ID}
+      ENABLE_TESTING_UI: ${ENABLE_TESTING_UI}
     secrets:
       - azure_preview_vm_key
     depends_on:

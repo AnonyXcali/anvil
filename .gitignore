@@ -34,6 +34,7 @@ node_modules/
 # local generated projects/build workspaces
 tmp/
 .tmp/
+tasks/
 builds/
 preview-builds/
 generated-projects/

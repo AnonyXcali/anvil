@@ -98,7 +98,7 @@ export class AnvilAgentSearchService {
 
     await context?.writer?.custom({
       type: StreamEventType.SEARCH_TOOL_FILE_SEARCH_LOG,
-      data: { line: `Files found... ${files.length}` },
+      data: { line: `Files found... ${files.length} ${files.join(',')}` },
       transient: true,
     });
 
@@ -163,9 +163,13 @@ export class AnvilAgentSearchService {
 
     const matched = files.filter((item) => item.type === 'match');
 
+    const fileCount = matched.map((match) => match.data.path.text).length;
+
     await context?.writer?.custom({
       type: StreamEventType.SEARCH_TOOL_CONTENT_SEARCH_LOG,
-      data: { line: `Content found in ${matched.length} files...` },
+      data: {
+        line: `Found ${matched.length} matches across ${fileCount} ${fileCount > 1 ? 'files' : 'file'}...`,
+      },
       transient: true,
     });
 
@@ -224,7 +228,9 @@ export class AnvilAgentSearchService {
 
     await context?.writer?.custom({
       type: StreamEventType.SEARCH_TOOL_EXPANSIVE_SEARCH_LOG,
-      data: { line: `${relevantText} in ${startLine}:${endLine}` },
+      data: {
+        line: `${relevantText.substring(1, 10)}.... in ${startLine}:${endLine}`,
+      },
       transient: true,
     });
 

@@ -5,7 +5,7 @@ import { ConversationModule } from 'src/conversation/conversation.module';
 import { DbModule } from 'src/db/db.module';
 import { IntentService } from './intent.service';
 import { JobModule } from 'src/job/job.module';
-import { AnvilAgentModule } from 'src/anvil-agent/anvil-agent.module';
+import { AnvilAgentSupervisorModule } from 'src/anvil-agent-supervisor/anvil-agent-supervisor.module';
 
 @Module({
   imports: [
@@ -13,7 +13,7 @@ import { AnvilAgentModule } from 'src/anvil-agent/anvil-agent.module';
     ConversationModule,
     DbModule,
     JobModule,
-    AnvilAgentModule,
+    AnvilAgentSupervisorModule,
   ],
   providers: [IntentProcessor, IntentService],
 })

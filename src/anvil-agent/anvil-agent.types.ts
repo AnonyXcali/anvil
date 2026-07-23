@@ -84,9 +84,23 @@ export type FINAL_RESPONSE_SHAPE = {
     startRange: number;
     endRange: number;
   };
+  file_exists: boolean;
   action_tokens: FILE_MODIFICATION_TOKENS[];
   precise_instruction: string;
+  code: string | null;
 };
+
+export type ERROR = {
+  error_type: SEARCH_ERROR_TYPES;
+  error_message: string;
+} | null;
+
+const Z_SEARCH_ERROR_TYPES: z.ZodType<SEARCH_ERROR_TYPES> = z.enum([
+  'unknown_error',
+  'unknown_query',
+  'max_calls_exceeded',
+  'sensitive_data_breach',
+]);
 
 export type SEARCH_STRUCTURED_OUTPUT = {
   is_final: boolean;
@@ -94,11 +108,29 @@ export type SEARCH_STRUCTURED_OUTPUT = {
   final: {
     files_that_require_change: Array<FINAL_RESPONSE_SHAPE>;
   } | null;
-  error: {
-    error_type: SEARCH_ERROR_TYPES;
-    error_message: string;
-  } | null;
+  error: ERROR;
 };
+
+export const Z_ERROR_SHAPE: z.ZodType<ERROR> = z
+  .object({
+    error_type: Z_SEARCH_ERROR_TYPES,
+    error_message: z.string(),
+  })
+  .nullable();
+
+export const Z_FINAL_SHAPE_RESPONSE: z.ZodType<FINAL_RESPONSE_SHAPE> = z.object(
+  {
+    file_path: z.string(),
+    line_range: z.object({
+      startRange: z.number(),
+      endRange: z.number(),
+    }),
+    file_exists: z.boolean(),
+    action_tokens: z.array(z.enum(['import', 'add', 'delete', 'replace'])),
+    precise_instruction: z.string(),
+    code: z.string().nullable(),
+  },
+);
 
 export const Z_SEARCH_STRUCTURED_OUTPUT: z.ZodType<SEARCH_STRUCTURED_OUTPUT> =
   z.object({
@@ -106,19 +138,7 @@ export const Z_SEARCH_STRUCTURED_OUTPUT: z.ZodType<SEARCH_STRUCTURED_OUTPUT> =
     tool: Z_TOOL_REQUEST_SHAPE,
     final: z
       .object({
-        files_that_require_change: z.array(
-          z.object({
-            file_path: z.string(),
-            line_range: z.object({
-              startRange: z.number(),
-              endRange: z.number(),
-            }),
-            action_tokens: z.array(
-              z.enum(['import', 'add', 'delete', 'replace']),
-            ),
-            precise_instruction: z.string(),
-          }),
-        ),
+        files_that_require_change: z.array(Z_FINAL_SHAPE_RESPONSE),
       })
       .nullable(),
     error: z
@@ -243,6 +263,15 @@ interface SummaryEvent {
 export type RgEvent = BeginEvent | MatchEvent | EndEvent | SummaryEvent;
 
 export type AnvilAgentContext = {
+  projectId: string;
+  callCount: number;
+};
+
+export type AnvilSupervisionContext = {
+  projectId: string;
+};
+
+export type AnvilSearchAgentContext = {
   projectId: string;
   callCount: number;
 };

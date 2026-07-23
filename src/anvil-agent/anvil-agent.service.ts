@@ -10,7 +10,6 @@ import {
   SEARCH_STRUCTURED_OUTPUT,
   Z_SEARCH_STRUCTURED_OUTPUT,
 } from './anvil-agent.types';
-import { SshService } from 'src/ssh/ssh.service';
 import { AGENT_DIRECTORY } from 'src/agent.directory';
 import { ChannelsService } from 'src/channels/channels.service';
 import { RequestContext } from '@mastra/core/request-context';
@@ -31,7 +30,6 @@ export class AnvilAgentService {
       project_id: string;
     }>,
     private readonly mastraService: MastraService,
-    private readonly sshService: SshService,
     private readonly channelService: ChannelsService,
   ) {}
 
@@ -66,6 +64,9 @@ export class AnvilAgentService {
         schema: Z_SEARCH_STRUCTURED_OUTPUT,
       },
       requestContext,
+      // providerOptions: {
+      //   openai: ANVIL_AGENT_CONFIGURATION,
+      // },
     });
 
     const { seqKey, listKey, metaKey, channelKey } = generateKeys(
@@ -85,6 +86,7 @@ export class AnvilAgentService {
 
       if (output.final?.files_that_require_change) {
         for (const res of output.final.files_that_require_change) {
+          this.logger.log('=========DO I EVEN COME HERE?===========');
           this.logger.log(res.precise_instruction);
           await this.channelService.publishAndStoreChunk(
             res.precise_instruction,
@@ -101,6 +103,23 @@ export class AnvilAgentService {
 
     for await (const chunk of resultStream.fullStream) {
       switch (chunk.type) {
+        //https://mastra.ai/docs/agents/using-tools
+        case 'tool-call-delta':
+          /**
+           * Using a partial JSON parser on the accumulated argsTextDelta fragments lets you
+           * extract usable argument values before the JSON is complete.
+           * This enables features like live diff previews for edit tools, streaming
+           * file content for write tools, and instant display of search patterns
+           * or file paths.
+           */
+          await this.channelService.publishAndStoreChunk(
+            `ArgsTextDelta: ${chunk.payload.argsTextDelta}`,
+            seqKey,
+            listKey,
+            metaKey,
+            channelKey,
+          );
+          continue;
         case 'tool-call':
           await this.channelService.publishAndStoreChunk(
             `Tool Call: ${chunk.payload.toolName}`,
@@ -112,7 +131,7 @@ export class AnvilAgentService {
           continue;
         case 'reasoning-delta':
           await this.channelService.publishAndStoreChunk(
-            `${chunk.payload.text}`,
+            `Reasoning: ${chunk.payload.text}`,
             seqKey,
             listKey,
             metaKey,
@@ -120,26 +139,21 @@ export class AnvilAgentService {
           );
           continue;
         case 'text-delta':
-          await this.channelService.publishAndStoreChunk(
-            `${chunk.payload.text}`,
-            seqKey,
-            listKey,
-            metaKey,
-            channelKey,
-          );
+          // await this.channelService.publishAndStoreChunk(channe
+          //   `Text-Delta: ${chunk.payload.text}`,
+          //   seqKey,
+          //   listKey,
+          //   metaKey,
+          //   channelKey,
+          // );
+          this.logger.log(chunk.payload.text);
           continue;
         case StreamEventType.SEARCH_ROUTER_LOG:
         case StreamEventType.SEARCH_TOOL_FILE_SEARCH_LOG:
         case StreamEventType.SEARCH_TOOL_CONTENT_SEARCH_LOG:
         case StreamEventType.SEARCH_TOOL_EXPANSIVE_SEARCH_LOG: {
           const chunkedData = chunk.data as { line: string };
-          await this.channelService.publishAndStoreChunk(
-            `LLM Response: ${chunkedData.line}`,
-            seqKey,
-            listKey,
-            metaKey,
-            channelKey,
-          );
+          this.logger.log(`LLM response: ${chunkedData.line}`);
           continue;
         }
         case 'object-result': {
@@ -207,20 +221,14 @@ export class AnvilAgentService {
             }
           }
 
-          break;
+          continue;
         }
         case 'error':
           this.logger.fatal('=========ERROR OCCURED=======');
           this.logger.error(chunk.payload.error);
-          break;
+          continue;
         default:
-          await this.channelService.publishAndStoreChunk(
-            'Thinking...',
-            seqKey,
-            listKey,
-            metaKey,
-            channelKey,
-          );
+          continue;
       }
     }
 

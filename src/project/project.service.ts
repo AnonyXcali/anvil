@@ -194,14 +194,16 @@ export class ProjectService {
       throw new Error('Job id is not acquired');
     }
 
+    const projectJobId = `${job.id}:stop-container`;
+
     await this.jobService.insertIntoProjectJobs(
-      job.id + ':' + 'stop-container',
+      projectJobId,
       projectId,
       'stop-container',
     );
 
     return {
-      job_id: job.id,
+      job_id: projectJobId,
     };
   }
 
@@ -222,7 +224,7 @@ export class ProjectService {
     }
 
     const startJob = await this.startProjectQueue.add(
-      'stop-container',
+      'start-container',
       {
         project_id: projectId,
         container_name: containerName,
@@ -247,14 +249,16 @@ export class ProjectService {
       throw new Error('Job id is not acquired');
     }
 
+    const projectJobId = `${startJob.id}:start-container`;
+
     await this.jobService.insertIntoProjectJobs(
-      startJob.id + ':' + 'start-container',
+      projectJobId,
       projectId,
-      'stop-container',
+      'start-container',
     );
 
     return {
-      job_id: startJob.id,
+      job_id: projectJobId,
     };
   }
 

@@ -10,7 +10,12 @@ export interface ChannelsInterface {
     listKey: string,
     metaKey: string,
     channelKey: string,
+    metadata?: ChannelChunkMetadata,
   ): Promise<void>;
 }
+
+export type ChannelChunkMetadata = {
+  streamId?: string;
+};
 
 export const CHANNELS_REDIS = 'CHANNELS_REDIS';

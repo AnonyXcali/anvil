@@ -5,7 +5,7 @@ import { LlmService } from 'src/llm/llm.service';
 import { ConversationService } from 'src/conversation/conversation.service';
 import { IntentService } from './intent.service';
 import { JobService } from 'src/job/job.service';
-import { AnvilAgentService } from 'src/anvil-agent/anvil-agent.service';
+import { AnvilAgentSupervisorService } from 'src/anvil-agent-supervisor/anvil-agent-supervisor.service';
 
 @Processor('intent-execution', {
   concurrency: 1,
@@ -18,7 +18,7 @@ export class IntentProcessor extends WorkerHost {
     private readonly conversationService: ConversationService,
     private readonly intentService: IntentService,
     private readonly jobService: JobService,
-    private readonly anvilAgentService: AnvilAgentService,
+    private readonly anvilAgentSupervisorService: AnvilAgentSupervisorService,
   ) {
     super();
   }
@@ -40,8 +40,7 @@ export class IntentProcessor extends WorkerHost {
         job.data.conversation_id,
       );
     } else if (intent === 'offload') {
-      //this flow would go to the code-gen or offload module (yet to decide)
-      await this.anvilAgentService.anvilAgentQueue(
+      await this.anvilAgentSupervisorService.anvilSupervisorAgentQueue(
         job.data.conversation_id,
         job.data.query,
         job.data.project_id,
