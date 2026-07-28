@@ -33,6 +33,8 @@ export type PreviewPlatformRole = "assistant" | "system" | "tool" | "user";
 
 export type PreviewPlatformTemplates = "react";
 
+export type PreviewPlatformWorkflowJobStatus = "cancelled" | "completed" | "failed" | "pending" | "running" | "suspended";
+
 export type Timestamp = ColumnType<Date, Date | string, Date | string>;
 
 export interface Pgmigrations {
@@ -167,6 +169,24 @@ export interface PreviewPlatformVerification {
   value: string;
 }
 
+export interface PreviewPlatformWorkflowRun {
+  conversation_id: string;
+  created_at: Generated<Timestamp>;
+  /**
+   * Frontend approvalId for human-in-the-loop decisions
+   */
+  id: Generated<string>;
+  project_id: string;
+  run_id: string;
+  status: Generated<PreviewPlatformWorkflowJobStatus | null>;
+  /**
+   * Mastra workflow snapshot captured when a workflow suspends
+   */
+  suspended_step: Json | null;
+  updated_at: Generated<Timestamp>;
+  workflow_id: string;
+}
+
 export interface DB {
   pgmigrations: Pgmigrations;
   "preview_platform.account": PreviewPlatformAccount;
@@ -180,4 +200,5 @@ export interface DB {
   "preview_platform.session": PreviewPlatformSession;
   "preview_platform.user": PreviewPlatformUser;
   "preview_platform.verification": PreviewPlatformVerification;
+  "preview_platform.workflow_run": PreviewPlatformWorkflowRun;
 }

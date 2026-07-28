@@ -1,0 +1,38 @@
+<section class="page-heading">
+  <div><div class="section-label"><span class="pulse-dot"></span> Workspace overview</div><h1>Projects</h1><p class="lede">Manage local project environments and launch workflow conversations.</p></div>
+  {{#if selectedProject}}<a class="button button-primary" href="/testing/projects/{{selectedProject.id}}/conversations/new"><span class="button-icon">＋</span> New conversation</a>{{/if}}
+</section>
+
+<section class="metric-strip"><div class="metric-card"><span class="metric-label">Total projects</span><strong>{{projects.length}}</strong><span class="metric-note">Local workspaces</span></div><div class="metric-card"><span class="metric-label">Active environment</span><strong>{{#if selectedProject}}{{selectedProject.status}}{{else}}—{{/if}}</strong><span class="metric-note">{{#if selectedProject}}Selected project{{else}}Select a project{{/if}}</span></div><div class="metric-card"><span class="metric-label">Console mode</span><strong>DEV</strong><span class="metric-note"><span class="status-dot status-dot-active"></span> Connected locally</span></div></section>
+
+<section class="dashboard-grid">
+  <div class="panel projects-panel">
+    <div class="panel-header"><div><p class="eyebrow">Workspace registry</p><h2>Projects</h2></div><span class="count-badge">{{projects.length}}</span></div>
+    <form class="inline-form create-project-form" method="post" action="/testing/projects"><label class="sr-only" for="project-name">Project name</label><input id="project-name" name="name" required placeholder="Name a new project..."><button class="button button-primary" type="submit">Create</button></form>
+    <div class="project-list">
+      {{#if projects.length}}
+        {{#each projects}}
+          <a class="project-row {{#if (eq ../selectedProjectId id)}}is-selected{{/if}}" href="/testing?projectId={{id}}">
+            <span><strong>{{name}}</strong><small>{{id}}</small></span>
+            <span class="status-pill status-{{statusClass status}}">{{status}}</span>
+          </a>
+        {{/each}}
+      {{else}}
+        <p class="empty-state">No projects yet. Create one to begin.</p>
+      {{/if}}
+    </div>
+  </div>
+
+  <div class="panel panel-accent selected-project-panel">
+    <div class="panel-header"><p class="eyebrow">Active context</p><span class="live-badge"><span class="status-dot status-dot-active"></span> LIVE</span></div>
+    {{#if selectedProject}}
+      <h2 class="selected-project-name">{{selectedProject.name}}</h2><p class="mono">{{selectedProject.id}}</p>
+      <div class="detail-list">
+        <div><span>Status</span><strong class="status-text status-{{statusClass selectedProject.status}}">{{selectedProject.status}}</strong></div><div><span>Preview port</span><strong>{{selectedProject.active_port}}</strong></div>
+      </div>
+      <a class="button button-primary button-wide" href="/testing/projects/{{selectedProject.id}}/conversations/new">Start a conversation <span>→</span></a>
+    {{else}}
+      <div class="empty-illustration">◇</div><h2>Choose a project</h2><p class="muted">Select a workspace to see its status and start a conversation.</p>
+    {{/if}}
+  </div>
+</section>

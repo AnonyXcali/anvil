@@ -1,0 +1,33 @@
+<section class="page-heading compact conversation-heading"><div><a class="back-link" href="/testing">← Projects</a><div class="section-label"><span class="pulse-dot"></span> Live conversation</div><h1>{{project.name}}</h1><p class="lede">Inspect the supervisor workflow stream, approval requests, and raw events in one workspace.</p></div><div class="id-stack"><span><small>PROJECT</small><code>{{project.id}}</code></span><span><small>CONVERSATION</small><code>{{conversationId}}</code></span></div></section>
+
+<section class="conversation-layout" data-conversation-id="{{conversationId}}" data-stream-url="{{streamUrl}}">
+  <div class="conversation-column">
+    <section class="panel approval-panel" id="approval-panel" hidden><div class="panel-header"><div><p class="eyebrow">Human in the loop</p><h2>Approval</h2></div><span class="context-pill">HITL</span></div><div id="approval-content" class="empty-state">No approval is waiting.</div></section>
+    <div class="panel transcript-panel">
+      <div class="panel-header"><div><p class="eyebrow">Transcript</p><h2>Conversation</h2></div><span id="connection-state" class="connection-state"><span class="status-dot"></span> Disconnected</span></div>
+      <div id="transcript" class="transcript">
+        {{#each messages}}
+          <article class="chat-card chat-{{role}}">
+            <div class="chat-meta"><span>{{role}}</span></div>
+            <div class="chat-content">{{message}}</div>
+          </article>
+        {{else}}
+          <p class="empty-state">No messages yet. Start with a request below.</p>
+        {{/each}}
+      </div>
+      <form id="message-form" class="message-form" method="post" action="/testing/projects/{{project.id}}/conversations/{{conversationId}}/messages">
+        <label class="sr-only" for="query">Message</label>
+        <textarea id="query" name="query" rows="3" required placeholder="Ask for a frontend or project-file change..."></textarea>
+        <div class="composer-footer"><span class="muted">Supervisor and offload requests stream here.</span><button id="send-button" class="button button-primary" type="submit">Send request <span>→</span></button></div>
+      </form>
+    </div>
+  </div>
+
+  <aside class="inspector-column">
+    <section class="panel"><div class="panel-header"><div><p class="eyebrow">Environment</p><h2>Project controls</h2></div><span id="project-job-status" class="status-pill status-{{statusClass project.status}}">{{project.status}}</span></div><div class="form-actions"><button class="button" data-project-action="start" data-project-id="{{project.id}}">Start</button><button class="button" data-project-action="stop" data-project-id="{{project.id}}">Stop</button></div><p id="project-job-log" class="empty-state">Start/stop jobs use the project status API.</p></section>
+    <section class="panel"><div class="panel-header"><div><p class="eyebrow">Configuration</p><h2>Project metadata</h2></div></div><form class="inline-form" data-project-rename action="/testing/projects/{{project.id}}"><input name="name" value="{{project.name}}" required><button class="button" type="submit">Rename</button></form><button class="button button-danger" data-project-delete data-project-id="{{project.id}}" type="button">Delete project</button></section>
+    <section class="panel timeline-panel"><div class="panel-header"><div><p class="eyebrow">Event history</p><h2>Timeline</h2></div><button id="reset-stream" class="button button-quiet" type="button">Reset</button></div><div id="timeline" class="timeline"><p class="empty-state">Waiting for stream events.</p></div></section>
+    <section class="panel debug-panel"><div class="panel-header"><div><p class="eyebrow">Raw envelopes</p><h2>Debug stream</h2></div><span class="context-pill">RAW</span></div><pre id="debug-output" class="debug-output">No raw envelopes received.</pre></section>
+    <section class="panel request-log-panel"><div class="panel-header"><div><p class="eyebrow">Transport</p><h2>Request log</h2></div></div><div id="request-log" class="request-log"></div></section>
+  </aside>
+</section>

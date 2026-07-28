@@ -26,5 +26,6 @@ import { SshModule } from 'src/ssh/ssh.module';
   ],
   controllers: [ProjectController],
   providers: [ProjectService, ProjectStopProcessor, ProjectStartProcessor],
+  exports: [ProjectService],
 })
 export class ProjectModule {}

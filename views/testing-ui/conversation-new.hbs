@@ -1,0 +1,12 @@
+<section class="page-heading compact"><div><a class="back-link" href="/testing">← Back to projects</a><div class="section-label"><span class="pulse-dot"></span> Conversation workspace</div><h1>Start a conversation</h1><p class="lede">Send a request into the supervisor workflow and inspect the response stream in real time.</p></div><div class="context-summary"><span class="muted">Project</span><strong>{{project.name}}</strong><code>{{project.id}}</code></div></section>
+<section class="conversation-layout new-conversation-layout">
+  <div class="panel composer-panel">
+    <div class="panel-header"><div><p class="eyebrow">Request composer</p><h2>What should we work on?</h2></div><span class="context-pill">PROJECT SCOPED</span></div>
+    <form class="message-form" method="post" action="/testing/projects/{{project.id}}/conversations">
+      <label class="sr-only" for="query">Request</label>
+      <textarea id="query" name="query" rows="9" required placeholder="Describe the change you want to test..."></textarea>
+      <div class="composer-footer"><span class="muted"><span class="status-dot status-dot-active"></span> A conversation ID will be created automatically.</span><button class="button button-primary" type="submit">Start workflow <span>→</span></button></div>
+    </form>
+  </div>
+  <aside class="panel panel-accent examples-panel"><p class="eyebrow">Try an example</p><h2>Fast paths</h2><div class="example-prompt"><span>01</span><p>Change the landing page button color.</p><button type="button" class="copy-example" data-copy-text="Change the landing page button color." aria-label="Use example">↗</button></div><div class="example-prompt"><span>02</span><p>Add a settings panel and update the navigation.</p><button type="button" class="copy-example" data-copy-text="Add a settings panel and update the navigation." aria-label="Use example">↗</button></div></aside>
+</section>

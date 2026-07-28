@@ -96,7 +96,7 @@ export class ProjectStartProcessor extends WorkerHost {
     await this.jobService.updateProjectJobStatus(
       job.id + ':' + START_CONTAINER,
       job.data.project_id,
-      'completed',
+      'failed',
       START_CONTAINER,
       failed.message,
     );

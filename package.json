@@ -26,6 +26,7 @@
   "dependencies": {
     "@mastra/core": "^1.50.0",
     "@mastra/duckdb": "^1.5.0",
+    "@mastra/evals": "^1.6.0",
     "@mastra/libsql": "^1.15.1",
     "@mastra/loggers": "^1.2.0",
     "@mastra/memory": "^1.22.1",
@@ -40,6 +41,7 @@
     "better-auth": "^1.6.15",
     "bullmq": "^5.76.6",
     "dotenv": "^17.4.2",
+    "hbs": "^4.2.1",
     "ioredis": "^5.10.1",
     "kysely": "^0.29.2",
     "mastra": "^1.18.1",
@@ -57,6 +59,7 @@
     "@nestjs/schematics": "^11.0.0",
     "@nestjs/testing": "^11.0.1",
     "@types/express": "^5.0.0",
+    "@types/hbs": "^4.0.5",
     "@types/jest": "^30.0.0",
     "@types/node": "^24.0.0",
     "@types/pg": "^8.20.0",

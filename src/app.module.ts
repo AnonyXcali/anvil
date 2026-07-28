@@ -19,6 +19,9 @@ import { JobModule } from './job/job.module';
 import { ProjectModule } from './project/project.module';
 import { AnvilAgentModule } from './anvil-agent/anvil-agent.module';
 import { MastraSharedModule } from './mastra/mastra-shared.module';
+import { AnvilAgentSupervisorModule } from './anvil-agent-supervisor/anvil-agent-supervisor.module';
+import { AnvilAgentEditModule } from './anvil-agent-edit/anvil-agent-edit.module';
+import { TestingUiModule } from './testing-ui/testing-ui.module';
 
 @Module({
   imports: [
@@ -48,6 +51,9 @@ import { MastraSharedModule } from './mastra/mastra-shared.module';
     JobModule,
     ProjectModule,
     AnvilAgentModule,
+    AnvilAgentSupervisorModule,
+    AnvilAgentEditModule,
+    TestingUiModule,
     MastraSharedModule,
   ],
   controllers: [AppController],

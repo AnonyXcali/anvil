@@ -25,11 +25,30 @@ export class CoreController {
       conversation_id: string;
       project_id: string;
     },
+    @Session() session: UserSession,
   ) {
     return this.coreService.talk(
       body.query,
       body.conversation_id,
       body.project_id,
+      session.user.id,
+    );
+  }
+
+  @Post('/decision')
+  // TODO: UI must disable the approval buttons immediately when this POST call is triggered.
+  async Decide(
+    @Body()
+    body: {
+      decision: 'accept' | 'deny';
+      approvalRequestId: string;
+    },
+    @Session() session: UserSession,
+  ) {
+    return this.coreService.handleDecision(
+      body.decision,
+      body.approvalRequestId,
+      session.user.id,
     );
   }
 

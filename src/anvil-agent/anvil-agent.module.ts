@@ -7,7 +7,6 @@ import { SshModule } from 'src/ssh/ssh.module';
 import { ChannelsModule } from 'src/channels/channels.module';
 import { JobModule } from 'src/job/job.module';
 import { DbModule } from 'src/db/db.module';
-import { AnvilAgentSearchModule } from './anvil-agent-search.module';
 
 @Module({
   imports: [
@@ -18,7 +17,6 @@ import { AnvilAgentSearchModule } from './anvil-agent-search.module';
     SshModule,
     ChannelsModule,
     JobModule,
-    AnvilAgentSearchModule,
   ],
   controllers: [AnvilAgentController],
   providers: [AnvilAgentService, AnvilAgentProcessor],

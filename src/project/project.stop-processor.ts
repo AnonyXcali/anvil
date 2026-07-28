@@ -97,7 +97,7 @@ export class ProjectStopProcessor extends WorkerHost {
     await this.jobService.updateProjectJobStatus(
       job.id + ':' + STOP_CONTAINER,
       job.data.project_id,
-      'completed',
+      'failed',
       STOP_CONTAINER,
       failed.message,
     );

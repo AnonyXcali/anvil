@@ -17,5 +17,6 @@ import { SharedredisModule } from 'src/sharedredis/sharedredis.module';
   ],
   providers: [CoreService],
   controllers: [CoreController],
+  exports: [CoreService],
 })
 export class CoreModule {}

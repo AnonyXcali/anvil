@@ -43,6 +43,8 @@ export class CodeGenProcessor extends WorkerHost {
   }
 
   private async scaffoldProject(job: Job<TaskJobData>) {
+    // TODO: Publish structured scaffold queued/active/failed lifecycle events
+    // so the UI does not need to infer scaffold state from preview messages.
     await job.updateProgress(25);
 
     if (!job.id) {
@@ -83,6 +85,7 @@ export class CodeGenProcessor extends WorkerHost {
       listKey,
       metaKey,
       channelKey,
+      { streamId: `${job.id}:scaffold-project` },
     );
 
     return {

@@ -14,6 +14,7 @@ export class AnvilAgentProcessor extends WorkerHost {
   private readonly logger = new Logger(AnvilAgentProcessor.name);
   constructor(
     private readonly anvilAgentService: AnvilAgentService,
+    //private readonly anvilSupervisorAgentService: AnvilSupervisorAgentService,
     private readonly jobService: JobService,
   ) {
     super();
@@ -53,6 +54,7 @@ export class AnvilAgentProcessor extends WorkerHost {
     this.logger.log('=========ANVIL==========');
     this.logger.log('ABOUT TO START LLM CALL');
     this.logger.log('=========ANVIL==========');
+    //TODO: need to pass it to supervisor agent instead
     const message: SEARCH_STRUCTURED_OUTPUT | undefined =
       await this.anvilAgentService.askAnvilAgent(
         messages,

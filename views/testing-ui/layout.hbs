@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{{title}}</title>
+    <link rel="stylesheet" href="/testing-ui/testing-ui.css">
+    <script src="https://unpkg.com/htmx.org@2.0.4" defer></script>
+  </head>
+  <body>
+    {{#if (eq shellVariant "auth")}}
+      <header class="auth-topbar">
+        <a class="brand" href="/testing/auth"><span class="brand-mark">A</span><span>ANVIL</span><small>TEST CONSOLE</small></a>
+        <span class="environment-badge">LOCAL / DEV</span>
+      </header>
+      <main class="auth-shell">{{{body}}}</main>
+    {{else}}
+      <header class="topbar">
+        <div class="topbar-title"><a class="topbar-brand" href="/testing"><span class="brand-mark">A</span><span>ANVIL</span></a><span class="crumb">Testing console</span>{{#if projectContext}}<span class="crumb-divider">/</span><strong>{{projectContext.name}}</strong>{{/if}}</div>
+        <div class="topbar-actions"><span class="environment-badge">LOCAL / DEV</span>{{#if projectContext}}<span class="context-pill"><span class="status-dot status-dot-{{statusClass projectContext.status}}"></span>{{projectContext.status}}</span>{{/if}}<a class="icon-button" href="/testing/auth" aria-label="Authentication">↗</a></div>
+      </header>
+      <main class="page-shell">{{{body}}}</main>
+    {{/if}}
+    <script src="/testing-ui/testing-ui.js" defer></script>
+  </body>
+</html>
