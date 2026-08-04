@@ -3,12 +3,10 @@ import { Inject, Injectable, Logger } from '@nestjs/common';
 import { MastraService } from '@mastra/nestjs';
 import { Queue } from 'bullmq';
 import { Kysely } from 'kysely';
-import { ChannelsService } from 'src/channels/channels.service';
 import { ConversationService } from 'src/conversation/conversation.service';
 import type { DB, Json } from 'src/db/db.types';
 import { JobService } from 'src/job/job.service';
 import { KYSELY_DB } from 'src/tokens';
-import { generateKeys } from 'src/utils';
 import { AGENT_DIRECTORY } from 'src/agent.directory';
 import { RequestContext } from '@mastra/core/request-context';
 import type { MessageListInput } from '@mastra/core/agent/message-list';
@@ -16,13 +14,12 @@ import type { AnvilAgentContext } from 'src/anvil-agent/anvil-agent.types';
 import { StreamEventType } from 'src/anvil-agent/anvil-agent-chunk.dictionary';
 import {
   buildAppStreamEvent,
-  buildStreamEnvelope,
   getApprovalSuspendPayload,
   getStreamChunkType,
   getSuspendedToolRunIdFromMessages,
   getWorkflowIdentifiers,
-  isEmptyStreamChunk,
 } from 'src/anvil-agent/anvil-agent-streaming.helpers';
+import { AnvilAgentStreamPublisher } from 'src/anvil-agent/anvil-agent-stream-publisher.service';
 import { ANVIL_SUPERVISOR_AGENT_JOB_DATA } from './anvil-agent-supervisor.types';
 
 const FRONTEND_ENGINEERING_WORKFLOW_ID = 'anvil-agent-create-workflow';
@@ -37,7 +34,7 @@ export class AnvilAgentSupervisorService {
     private readonly conversationService: ConversationService,
     private readonly jobService: JobService,
     private readonly mastraService: MastraService,
-    private readonly channelService: ChannelsService,
+    private readonly streamPublisher: AnvilAgentStreamPublisher,
     @Inject(KYSELY_DB) private readonly db: Kysely<DB>,
   ) {}
 
@@ -66,32 +63,17 @@ export class AnvilAgentSupervisorService {
         requestContext,
       },
     );
-    const { seqKey, listKey, metaKey, channelKey } = generateKeys(
-      conversationId,
-      `${jobId}:supervisor`,
-    );
     const streamId = `${jobId}:supervisor`;
 
     const publishChunk = async (chunk: unknown) => {
-      if (isEmptyStreamChunk(chunk)) {
-        return;
-      }
-
-      await this.channelService.publishAndStoreChunk(
-        JSON.stringify(
-          buildStreamEnvelope({
-            chunk,
-            conversationId,
-            source: 'supervisor',
-            jobId,
-          }),
-        ),
-        seqKey,
-        listKey,
-        metaKey,
-        channelKey,
-        { streamId },
-      );
+      await this.streamPublisher.publish({
+        chunk,
+        conversationId,
+        jobId: `${jobId}:supervisor`,
+        envelopeJobId: jobId,
+        source: 'supervisor',
+        streamId,
+      });
     };
 
     const publishAppEvent = async (chunk: unknown) => {

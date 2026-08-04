@@ -6,13 +6,20 @@ import { Messages } from 'src/types/types';
  */
 
 export interface Conversation {
-  handleConversation(query: string, conversationId: string): Promise<void>;
+  handleConversation(
+    query: string,
+    conversationId: string,
+    projectId: string,
+    streamId: string,
+  ): Promise<void>;
 }
 
 export type CONVERSATION_TYPE = {
   query: string;
   messages: Messages;
   conversation_id: string;
+  project_id: string;
+  stream_id: string;
 };
 
 export type CONVERSATION_JOB = Job<CONVERSATION_TYPE>;

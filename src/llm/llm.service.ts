@@ -4,10 +4,7 @@ import { OpenAI } from 'openai';
 import { AppEnv } from '../config/env.validation';
 import type { DB } from 'src/db/db.types';
 import { Kysely } from 'kysely';
-import {
-  INTENT_CLASSIFIER_PROMPT,
-  CONVERSATION_SYSTEM_PROMPT,
-} from './llm.prompts';
+import { CONVERSATION_SYSTEM_PROMPT } from './llm.prompts';
 import { ChannelsService } from 'src/channels/channels.service';
 import { KYSELY_DB } from 'src/tokens';
 import { Messages } from 'src/types/types';
@@ -143,22 +140,6 @@ export class LlmService implements OnModuleInit {
           content: generateEditSystemPrompt(appTsx as string),
         },
         { role: 'user', content: message },
-      ],
-    });
-    return response.choices[0]?.message.content ?? null;
-  }
-
-  async intent(query: string) {
-    const response = await this.client.chat.completions.create({
-      model: this.configService.getOrThrow('OPENAI_MODEL', {
-        infer: true,
-      }),
-      messages: [
-        {
-          role: 'system',
-          content: INTENT_CLASSIFIER_PROMPT,
-        },
-        { role: 'user', content: query },
       ],
     });
     return response.choices[0]?.message.content ?? null;

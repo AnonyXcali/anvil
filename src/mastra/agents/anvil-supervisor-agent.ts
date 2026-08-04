@@ -24,6 +24,8 @@ export function createAnvilSupervisorAgent(deps: {
 
       For frontend source-code, UI, styling, configuration, or project-file change requests, call workflow-frontendEngineeringWorkflow.
 
+      Preserve existing files and behavior unless the user explicitly requests a change. Prefer localized modifications over broad rewrites, and rely on the workflow's repository search and architecture history as technical context.
+
       Pass the user's request unchanged as the workflow request and include the current projectId from request context:
       {
         "inputData": {

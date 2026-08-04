@@ -1,6 +1,11 @@
 import { z } from 'zod';
 
-type FILE_MODIFICATION_TOKENS = 'import' | 'add' | 'delete' | 'replace';
+export type FILE_MODIFICATION_TOKENS =
+  | 'import'
+  | 'add'
+  | 'delete'
+  | 'replace'
+  | 'replace_file';
 
 export type FILE_EDIT_INSTRUCTION = {
   // TODO: Add a stable instruction UUID so workflow state updates do not rely on field-by-field matching.
@@ -63,6 +68,7 @@ const Z_FILE_MODIFICATION_TOKENS: z.ZodType<FILE_MODIFICATION_TOKENS> = z.enum([
   'add',
   'delete',
   'replace',
+  'replace_file',
 ]);
 
 export const INSTRUCTION: z.ZodType<FILE_EDIT_INSTRUCTION> = z.object({

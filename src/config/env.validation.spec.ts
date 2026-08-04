@@ -14,6 +14,11 @@ describe('validateEnv', () => {
         SSH_PORT: '2222',
         SSH_USERNAME: 'test-user',
         SSH_PRIVATE_KEY_PATH: '/tmp/test-key',
+        BETTER_AUTH_URL: 'http://localhost:3000',
+        EXA_KEY: 'exa-key',
+        FIRECRAWL_KEY: 'firecrawl-key',
+        LIGHTPANDA_KEY: 'lightpanda-key',
+        LIGHTPANDA_ENDPOINT: 'wss://lightpanda.example/ws',
       }),
     ).toEqual({
       PORT: 4500,
@@ -26,6 +31,12 @@ describe('validateEnv', () => {
       SSH_PORT: 2222,
       SSH_USERNAME: 'test-user',
       SSH_PRIVATE_KEY_PATH: '/tmp/test-key',
+      BETTER_AUTH_URL: 'http://localhost:3000',
+      EXA_KEY: 'exa-key',
+      FIRECRAWL_KEY: 'firecrawl-key',
+      LIGHTPANDA_KEY: 'lightpanda-key',
+      LIGHTPANDA_ENDPOINT: 'wss://lightpanda.example/ws',
+      ENABLE_TESTING_UI: false,
     });
   });
 
@@ -40,6 +51,11 @@ describe('validateEnv', () => {
         SSH_HOST: 'localhost',
         SSH_USERNAME: 'test-user',
         SSH_PRIVATE_KEY_PATH: '/tmp/test-key',
+        BETTER_AUTH_URL: 'http://localhost:3000',
+        EXA_KEY: 'exa-key',
+        FIRECRAWL_KEY: 'firecrawl-key',
+        LIGHTPANDA_KEY: 'lightpanda-key',
+        LIGHTPANDA_ENDPOINT: 'wss://lightpanda.example/ws',
       }),
     ).toMatchObject({
       PORT: 3000,

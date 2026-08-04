@@ -1,6 +1,5 @@
 import { Logger } from '@nestjs/common';
 import { OnWorkerEvent, Processor, WorkerHost } from '@nestjs/bullmq';
-import { LlmService } from 'src/llm/llm.service';
 import { type CONVERSATION_JOB } from './convesation.types';
 import { ConversationService } from './conversation.service';
 import { JobService } from 'src/job/job.service';
@@ -13,7 +12,6 @@ export class ConversationProcessor extends WorkerHost {
   private readonly logger = new Logger(ConversationProcessor.name);
 
   constructor(
-    private readonly llmService: LlmService,
     private readonly conversationService: ConversationService,
     private readonly jobService: JobService,
   ) {
@@ -28,11 +26,15 @@ export class ConversationProcessor extends WorkerHost {
       throw new Error('No job id is present');
     }
 
-    const message = await this.llmService.conversational(
-      job.data.query,
+    this.logger.log('============== ANVIL CONVO AGENT =================');
+    this.logger.log('INVOKED');
+    this.logger.log('============== ANVIL CONVO AGENT =================');
+    const message = await this.conversationService.streamConversation(
+      [...job.data.messages, { role: 'user', content: job.data.query }],
       job.data.conversation_id,
-      jobId,
-      job.data.messages,
+      job.data.project_id,
+      String(jobId),
+      job.data.stream_id,
     );
 
     await job.updateProgress(100);

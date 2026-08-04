@@ -23,7 +23,7 @@ const STREAM_LOGGABLE_STEPS = {
 } as const;
 
 const STREAM_LOGGABLE_TOOLS = {
-  'workflow-editWorkflow': false,
+  run_edit_workflow: false,
   read_file: false,
   create_file: false,
   create_folder: false,
@@ -32,11 +32,21 @@ const STREAM_LOGGABLE_TOOLS = {
   delete_file: false,
   delete_folder: false,
   edit_file: true,
+  replace_file: true,
 } as const;
 
 const STREAM_LOGGABLE_TYPES = {
+  edit_progress: true,
   edit_agent_diagnostics: true,
   edit_download_diagnostics: true,
+  edit_verification_started: true,
+  edit_verification_iteration: true,
+  edit_verification_scorer: true,
+  edit_verification_completed: true,
+  edit_verification_failed: true,
+  css_validation: true,
+  history_read_warning: true,
+  history_write_warning: true,
   edit_workflow_invocation_failure: true,
   error: true,
   'workflow-finish': true,

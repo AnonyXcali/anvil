@@ -9,6 +9,7 @@ import {
 
 export function createAnvilAgentSearchTool(
   anvilAgentSearchService: AnvilAgentSearchService,
+  options: { requireHistory?: boolean } = {},
 ) {
   return createTool({
     id: 'anvil-agent-search-tool',
@@ -17,7 +18,12 @@ export function createAnvilAgentSearchTool(
     inputSchema: Z_TOOL_REQUEST_SHAPE,
     outputSchema: Z_SEARCH_TOOL_RESPONSE,
     execute: async (inputData: TOOL_REQUEST_SHAPE, context) => {
-      return await fileSearch(inputData, anvilAgentSearchService, context);
+      return await fileSearch(
+        inputData,
+        anvilAgentSearchService,
+        context,
+        options.requireHistory === true,
+      );
     },
   });
 }
@@ -26,15 +32,20 @@ async function fileSearch(
   inputData: TOOL_REQUEST_SHAPE,
   anvilAgentSearchService: AnvilAgentSearchService,
   context: ToolExecutionContext,
+  requireHistory: boolean,
 ) {
+  if (requireHistory && context.requestContext?.get('historyRead') !== true) {
+    throw new Error(
+      'Read architecture/HISTORY.md before searching the project',
+    );
+  }
+
   const projectId: string | undefined =
     context.requestContext?.get('projectId');
 
   const count: number = context.requestContext?.get('callCount') as number;
   const updatedCount = count + 1;
   context.requestContext?.set('callCount', updatedCount);
-
-  console.log('PROJECT_ID' + ': ' + projectId);
 
   if (!projectId) {
     throw new Error('project id unavailable for processing');

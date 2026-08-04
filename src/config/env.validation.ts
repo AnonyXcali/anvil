@@ -12,6 +12,10 @@ export type AppEnv = {
   // TODO: SECURITY - require BETTER_AUTH_SECRET here and validate that it is strong enough for auth/session signing.
   BETTER_AUTH_URL: string;
   ENABLE_TESTING_UI: boolean;
+  EXA_KEY?: string;
+  FIRECRAWL_KEY?: string;
+  LIGHTPANDA_KEY?: string;
+  LIGHTPANDA_ENDPOINT?: string;
 };
 
 function requireString(
@@ -55,6 +59,12 @@ function parsePort(
   return port;
 }
 
+function optionalString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim().length > 0
+    ? value.trim()
+    : undefined;
+}
+
 export function validateEnv(config: Record<string, unknown>): AppEnv {
   return {
     PORT: parsePort(config.PORT, 'PORT', 3000),
@@ -73,5 +83,9 @@ export function validateEnv(config: Record<string, unknown>): AppEnv {
     BETTER_AUTH_URL: requireString(config.BETTER_AUTH_URL, 'BETTER_AUTH_URL'),
     ENABLE_TESTING_UI:
       config.ENABLE_TESTING_UI === 'true' || config.ENABLE_TESTING_UI === true,
+    EXA_KEY: optionalString(config.EXA_KEY),
+    FIRECRAWL_KEY: optionalString(config.FIRECRAWL_KEY),
+    LIGHTPANDA_KEY: optionalString(config.LIGHTPANDA_KEY),
+    LIGHTPANDA_ENDPOINT: optionalString(config.LIGHTPANDA_ENDPOINT),
   };
 }

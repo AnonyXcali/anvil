@@ -5,6 +5,7 @@ import { BullModule } from '@nestjs/bullmq';
 import { DbModule } from 'src/db/db.module';
 import { ChannelsModule } from 'src/channels/channels.module';
 import { SharedredisModule } from 'src/sharedredis/sharedredis.module';
+import { AnvilAgentStreamPublisher } from 'src/anvil-agent/anvil-agent-stream-publisher.service';
 
 @Module({
   imports: [
@@ -15,7 +16,7 @@ import { SharedredisModule } from 'src/sharedredis/sharedredis.module';
       name: 'intent-execution',
     }),
   ],
-  providers: [CoreService],
+  providers: [AnvilAgentStreamPublisher, CoreService],
   controllers: [CoreController],
   exports: [CoreService],
 })

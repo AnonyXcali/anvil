@@ -136,6 +136,13 @@
       for (const composer of state.composers.values()) {
         if (composer.streamId === streamId) return composer;
       }
+      const activeComposer = state.activeMessageId
+        ? state.composers.get(state.activeMessageId)
+        : null;
+      if (activeComposer && !activeComposer.streamId) {
+        activeComposer.streamId = streamId;
+        return activeComposer;
+      }
       return ensureComposer(makeMessageId(), streamId);
     }
     return state.activeMessageId
@@ -181,6 +188,8 @@
   }
 
   function activityForEvent(type, payload) {
+    // Status events drive the transient assistant activity indicator. Approval,
+    // completion, error, and text events are handled by handleEvent below.
     const activeStatuses = new Set(['started', 'running']);
     const inactiveStatuses = new Set([
       'completed',
@@ -328,6 +337,9 @@
   }
 
   function handleEvent(raw) {
+    // The SSE contract carries either raw text deltas or application events.
+    // Application event types control chat UI actions such as activity state,
+    // approval controls, completion, and error presentation.
     const event = unwrap(raw);
     const streamId = event.streamId;
     if (shouldIgnoreSequence(event)) return;
@@ -530,11 +542,11 @@
       if (!query) return;
       const messageId = makeMessageId();
       state.activeMessageId = messageId;
-      ensureComposer(messageId);
       const userCard = document.createElement('article');
       userCard.className = 'chat-card chat-user';
       userCard.innerHTML = `<div class="chat-meta">user</div><div class="chat-content">${escapeHtml(query)}</div>`;
       transcript?.append(userCard);
+      ensureComposer(messageId);
       input.value = '';
       sendButton.disabled = true;
       const originalSendLabel = sendButton.innerHTML;
@@ -548,6 +560,10 @@
         });
         if (!response.ok && response.type !== 'opaqueredirect')
           throw new Error(`HTTP ${response.status}`);
+        const result = await response.json().catch(() => null);
+        if (result?.stream_id) {
+          ensureComposer(messageId, result.stream_id);
+        }
       } catch (error) {
         log('message submission failed', error.message);
       }

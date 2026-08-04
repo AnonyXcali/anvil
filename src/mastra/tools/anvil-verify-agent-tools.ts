@@ -1,6 +1,11 @@
 import { createTool, ToolExecutionContext } from '@mastra/core/tools';
 import { z } from 'zod';
 import { AnvilAgentEditService } from 'src/anvil-agent-edit/anvil-agent-edit.service';
+import { AnvilHistoryService } from 'src/anvil-history/anvil-history.service';
+import {
+  appendHistoryBestEffort,
+  createAnvilHistoryTools,
+} from './anvil-history-tools';
 
 const Z_EDIT_FILE_OUTPUT = z.object({
   success: z.boolean(),
@@ -24,14 +29,22 @@ function getAllowedLocalFilePath(context: ToolExecutionContext): string {
   return localFilePath;
 }
 
+function getProjectFilePath(context: ToolExecutionContext): string {
+  return (
+    context.requestContext?.get('projectFilePath') ?? 'verification target'
+  );
+}
+
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : 'Unknown verify tool error';
 }
 
 export function createAnvilVerifyAgentTools(
   anvilAgentEditService: AnvilAgentEditService,
+  anvilHistoryService: AnvilHistoryService,
 ) {
   return {
+    ...createAnvilHistoryTools(anvilHistoryService),
     read_local_file: createTool({
       id: 'read_local_file',
       description:
@@ -73,7 +86,7 @@ export function createAnvilVerifyAgentTools(
     edit_file: createTool({
       id: 'edit_file',
       description:
-        'Apply a corrective edit to the local downloaded file being verified, with the reason/feedback provided. The code input must be the exact replacement text.',
+        'Apply a corrective range edit to the local downloaded file being verified, with the reason/feedback provided. Use replace_file for a complete-file correction.',
       inputSchema: z.object({
         localFilePath: z.string().min(1),
         code: z.string(),
@@ -107,14 +120,71 @@ export function createAnvilVerifyAgentTools(
               end: inputData.line_range.endRange,
             },
           );
+          await appendHistoryBestEffort(anvilHistoryService, context, {
+            subject: 'Apply verification correction',
+            status: 'success',
+            changesMade: `Applied verification correction to ${inputData.localFilePath}.`,
+            files: [getProjectFilePath(context)],
+            actor: 'anvil-verify-agent.edit_file',
+          });
 
           return { success: true, localFilePath, error: null };
         } catch (error: unknown) {
+          await appendHistoryBestEffort(anvilHistoryService, context, {
+            subject: 'Apply verification correction',
+            status: 'failed',
+            changesMade: getErrorMessage(error),
+            files: [getProjectFilePath(context)],
+            actor: 'anvil-verify-agent.edit_file',
+          });
           return {
             success: false,
             localFilePath: null,
             error: getErrorMessage(error),
           };
+        }
+      },
+    }),
+    replace_file: createTool({
+      id: 'replace_file',
+      description:
+        'Replace the complete current local file with exact text. Use only when verification requires a whole-file replacement, especially for CSS.',
+      inputSchema: z.object({
+        localFilePath: z.string().min(1),
+        code: z.string(),
+      }),
+      outputSchema: Z_EDIT_FILE_OUTPUT,
+      execute: async (inputData, context) => {
+        try {
+          const allowedLocalFilePath = getAllowedLocalFilePath(context);
+          if (inputData.localFilePath !== allowedLocalFilePath) {
+            throw new Error(
+              'Verify replace tool can only replace the current local file',
+            );
+          }
+
+          const localFilePath = await anvilAgentEditService.replaceLocalFile(
+            inputData.localFilePath,
+            inputData.code,
+          );
+          await appendHistoryBestEffort(anvilHistoryService, context, {
+            subject: 'Replace file during verification',
+            status: 'success',
+            changesMade: `Replaced the complete local file ${inputData.localFilePath}.`,
+            files: [getProjectFilePath(context)],
+            actor: 'anvil-verify-agent.replace_file',
+          });
+          return { success: true, localFilePath, error: null };
+        } catch (error: unknown) {
+          const message = getErrorMessage(error);
+          await appendHistoryBestEffort(anvilHistoryService, context, {
+            subject: 'Replace file during verification',
+            status: 'failed',
+            changesMade: message,
+            files: [getProjectFilePath(context)],
+            actor: 'anvil-verify-agent.replace_file',
+          });
+          return { success: false, localFilePath: null, error: message };
         }
       },
     }),

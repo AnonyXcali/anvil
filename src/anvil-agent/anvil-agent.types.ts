@@ -26,7 +26,12 @@ type SEARCH_ERROR_TYPES =
   | 'max_calls_exceeded'
   | 'sensitive_data_breach';
 
-type FILE_MODIFICATION_TOKENS = 'import' | 'add' | 'delete' | 'replace';
+export type FILE_MODIFICATION_TOKENS =
+  | 'import'
+  | 'add'
+  | 'delete'
+  | 'replace'
+  | 'replace_file';
 
 export type TOOL_REQUEST_SHAPE = {
   tool_call: SEARCH_TOOL;
@@ -126,7 +131,9 @@ export const Z_FINAL_SHAPE_RESPONSE: z.ZodType<FINAL_RESPONSE_SHAPE> = z.object(
       endRange: z.number(),
     }),
     file_exists: z.boolean(),
-    action_tokens: z.array(z.enum(['import', 'add', 'delete', 'replace'])),
+    action_tokens: z.array(
+      z.enum(['import', 'add', 'delete', 'replace', 'replace_file']),
+    ),
     precise_instruction: z.string(),
     code: z.string().nullable(),
   },
@@ -265,6 +272,29 @@ export type RgEvent = BeginEvent | MatchEvent | EndEvent | SummaryEvent;
 export type AnvilAgentContext = {
   projectId: string;
   callCount: number;
+  editProgress?: EditProgressSink;
+  editDiagnostic?: EditDiagnosticSink;
+  editWorkflowFailure?: string;
+  editCleanupTargets?: EditCleanupTarget[];
+};
+
+export type EditProgressStatus = 'started' | 'completed' | 'failed';
+
+export type EditProgressSink = (event: {
+  step: string;
+  status: EditProgressStatus;
+  message: string;
+}) => Promise<void>;
+
+export type EditDiagnosticSink = (event: {
+  type: string;
+  payload: Record<string, unknown>;
+}) => Promise<void>;
+
+export type EditCleanupTarget = {
+  projectId: string;
+  localFilePath: string;
+  backupFilePath?: string;
 };
 
 export type AnvilSupervisionContext = {
