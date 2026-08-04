@@ -3,13 +3,37 @@
     form.addEventListener('submit', async (event) => {
       event.preventDefault();
       const result = form.parentElement?.querySelector('[data-auth-result]');
+      const submit = form.querySelector('button[type="submit"]');
+      const originalLabel = submit?.innerHTML;
+      if (submit) {
+        submit.disabled = true;
+        submit.innerHTML = 'Working…';
+      }
       try {
-        const response = await fetch(form.dataset.authAction, { method: 'POST', headers: { 'content-type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify(Object.fromEntries(new FormData(form))) });
+        const response = await fetch(form.dataset.authAction, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          credentials: 'same-origin',
+          body: JSON.stringify(Object.fromEntries(new FormData(form))),
+        });
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         window.location.href = '/testing';
       } catch (error) {
-        if (result) result.textContent = `Authentication failed: ${error.message}`;
+        if (result)
+          result.textContent = `Authentication failed: ${error.message}`;
+        if (submit) {
+          submit.disabled = false;
+          submit.innerHTML = originalLabel || 'Continue';
+        }
       }
+    });
+  });
+  document.querySelectorAll('[data-copy-text]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const input = document.querySelector('#query');
+      if (!(input instanceof HTMLTextAreaElement)) return;
+      input.value = button.dataset.copyText || '';
+      input.focus();
     });
   });
   const root = document.querySelector('[data-conversation-id]');
@@ -32,11 +56,29 @@
   const approvalPanel = document.getElementById('approval-panel');
   const approvalContent = document.getElementById('approval-content');
   const sendButton = document.getElementById('send-button');
-  const defaultApprovalMessage = 'The AI has prepared a set of changes that require your approval.';
+  const defaultApprovalMessage =
+    'The AI has prepared a set of changes that require your approval.';
 
-  const escapeHtml = (value) => String(value ?? '').replace(/[&<>'"]/g, (char) => ({
-    '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#039;', '"': '&quot;'
-  })[char]);
+  function setConnectionState(label, stateName) {
+    if (!connectionState) return;
+    connectionState.dataset.state = stateName;
+    const labelTarget = connectionState.querySelector('.connection-label');
+    if (labelTarget) labelTarget.textContent = label;
+    else connectionState.textContent = label;
+  }
+
+  const escapeHtml = (value) =>
+    String(value ?? '').replace(
+      /[&<>'"]/g,
+      (char) =>
+        ({
+          '&': '&amp;',
+          '<': '&lt;',
+          '>': '&gt;',
+          "'": '&#039;',
+          '"': '&quot;',
+        })[char],
+    );
 
   function log(message, detail) {
     const row = document.createElement('div');
@@ -51,7 +93,9 @@
 
     try {
       const url = new URL(match[0]);
-      return url.protocol === 'http:' || url.protocol === 'https:' ? url.href : null;
+      return url.protocol === 'http:' || url.protocol === 'https:'
+        ? url.href
+        : null;
     } catch {
       return null;
     }
@@ -65,7 +109,16 @@
   function ensureComposer(messageId, streamId) {
     let composer = state.composers.get(messageId);
     if (!composer) {
-      composer = { messageId, streamId, text: '', status: 'running', timeline: [], activity: null, previewUrl: null, approvalMessage: null };
+      composer = {
+        messageId,
+        streamId,
+        text: '',
+        status: 'running',
+        timeline: [],
+        activity: null,
+        previewUrl: null,
+        approvalMessage: null,
+      };
       state.composers.set(messageId, composer);
       const card = document.createElement('article');
       card.className = 'chat-card chat-assistant';
@@ -85,11 +138,15 @@
       }
       return ensureComposer(makeMessageId(), streamId);
     }
-    return state.activeMessageId ? ensureComposer(state.activeMessageId, streamId) : null;
+    return state.activeMessageId
+      ? ensureComposer(state.activeMessageId, streamId)
+      : null;
   }
 
   function renderComposer(composer) {
-    const card = transcript?.querySelector(`[data-message-id="${CSS.escape(composer.messageId)}"]`);
+    const card = transcript?.querySelector(
+      `[data-message-id="${CSS.escape(composer.messageId)}"]`,
+    );
     if (!card) return;
     const content = card.querySelector('.chat-content');
     const activity = card.querySelector('.chat-activity');
@@ -125,7 +182,12 @@
 
   function activityForEvent(type, payload) {
     const activeStatuses = new Set(['started', 'running']);
-    const inactiveStatuses = new Set(['completed', 'failed', 'cancelled', 'suspended']);
+    const inactiveStatuses = new Set([
+      'completed',
+      'failed',
+      'cancelled',
+      'suspended',
+    ]);
     const status = payload.status;
 
     if (inactiveStatuses.has(status)) {
@@ -190,10 +252,19 @@
     renderComposer(composer);
     approvalContent.querySelectorAll('[data-decision]').forEach((button) => {
       button.addEventListener('click', async () => {
-        approvalContent.querySelectorAll('button').forEach((item) => { item.disabled = true; });
+        approvalContent.querySelectorAll('button').forEach((item) => {
+          item.disabled = true;
+        });
         log('approval decision sent', button.dataset.decision);
         try {
-          const response = await fetch('/core/decision', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ decision: button.dataset.decision, approvalRequestId: approvalId }) });
+          const response = await fetch('/core/decision', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({
+              decision: button.dataset.decision,
+              approvalRequestId: approvalId,
+            }),
+          });
           if (!response.ok) throw new Error(`HTTP ${response.status}`);
           approvalContent.textContent = 'No approval is waiting.';
           if (approvalPanel) approvalPanel.hidden = true;
@@ -207,16 +278,39 @@
   function unwrap(raw) {
     let value = raw;
     if (typeof value === 'string') {
-      try { value = JSON.parse(value); } catch { return { type: 'legacy-text', payload: { message: value } }; }
+      try {
+        value = JSON.parse(value);
+      } catch {
+        return { type: 'legacy-text', payload: { message: value } };
+      }
     }
     if (value && typeof value.chunk === 'string') {
       const outer = value;
       let chunk = outer.chunk;
-      try { chunk = JSON.parse(chunk); } catch { chunk = { type: 'legacy-text', payload: { message: outer.chunk } }; }
-      if (chunk?.raw && typeof chunk.raw === 'object' && chunk.raw.type === chunk.type) {
-        return { ...chunk.raw, streamId: outer.streamId, seq: outer.seq, rawEnvelope: outer, debugEnvelope: chunk };
+      try {
+        chunk = JSON.parse(chunk);
+      } catch {
+        chunk = { type: 'legacy-text', payload: { message: outer.chunk } };
       }
-      return { ...chunk, streamId: outer.streamId, seq: outer.seq, rawEnvelope: outer };
+      if (
+        chunk?.raw &&
+        typeof chunk.raw === 'object' &&
+        chunk.raw.type === chunk.type
+      ) {
+        return {
+          ...chunk.raw,
+          streamId: outer.streamId,
+          seq: outer.seq,
+          rawEnvelope: outer,
+          debugEnvelope: chunk,
+        };
+      }
+      return {
+        ...chunk,
+        streamId: outer.streamId,
+        seq: outer.seq,
+        rawEnvelope: outer,
+      };
     }
     return value || {};
   }
@@ -240,19 +334,29 @@
     const rawEnvelope = event.rawEnvelope || event.raw || event;
     if (debugOutput && rawEnvelope) {
       const line = JSON.stringify(rawEnvelope, null, 2);
-      debugOutput.textContent = debugOutput.textContent === 'No raw envelopes received.' ? line : `${line}\n\n${debugOutput.textContent}`;
+      debugOutput.textContent =
+        debugOutput.textContent === 'No raw envelopes received.'
+          ? line
+          : `${line}\n\n${debugOutput.textContent}`;
       const lines = debugOutput.textContent.split('\n');
-      if (lines.length > 1200) debugOutput.textContent = lines.slice(0, 1200).join('\n');
+      if (lines.length > 1200)
+        debugOutput.textContent = lines.slice(0, 1200).join('\n');
     }
     const approvalId = event.payload?.approvalId;
-    const mappedMessageId = approvalId ? state.approvalToMessage.get(approvalId) : null;
-    const composer = mappedMessageId ? state.composers.get(mappedMessageId) : messageForStream(streamId);
+    const mappedMessageId = approvalId
+      ? state.approvalToMessage.get(approvalId)
+      : null;
+    const composer = mappedMessageId
+      ? state.composers.get(mappedMessageId)
+      : messageForStream(streamId);
     if (!composer) return;
     if (streamId && !composer.streamId) composer.streamId = streamId;
     const type = event.type || 'event';
     const payload = event.payload || event.data || {};
-    const message = payload.message || payload.text || payload.result || event.message || '';
-    if (type === 'text-delta' || type === 'text') composer.text += typeof message === 'string' ? message : '';
+    const message =
+      payload.message || payload.text || payload.result || event.message || '';
+    if (type === 'text-delta' || type === 'text')
+      composer.text += typeof message === 'string' ? message : '';
     const previewUrl = extractPreviewUrl(message);
     if (previewUrl) composer.previewUrl = previewUrl;
     const nextActivity = activityForEvent(type, payload);
@@ -262,22 +366,55 @@
       composer.text = completionMessage;
       composer.activity = null;
     }
-    if (type === 'workflow_status' || type === 'search_status' || type === 'edit_status' || type === 'tool_status' || type === 'verification_status' || type === 'approval_required' || type === 'completed' || type === 'error' || type === 'legacy-text') {
-      renderTimeline(composer, type, message || (type === 'completed' ? 'Workflow completed.' : 'Event received.'));
+    if (
+      type === 'workflow_status' ||
+      type === 'search_status' ||
+      type === 'edit_status' ||
+      type === 'tool_status' ||
+      type === 'verification_status' ||
+      type === 'approval_required' ||
+      type === 'completed' ||
+      type === 'error' ||
+      type === 'legacy-text'
+    ) {
+      renderTimeline(
+        composer,
+        type,
+        message ||
+          (type === 'completed' ? 'Workflow completed.' : 'Event received.'),
+      );
     }
     if (type === 'approval_required') showApproval(composer, payload);
-    if (type === 'completed' || type === 'workflow-resume-completed') composer.status = 'completed';
-    if (type === 'error' || type === 'workflow-resume-cancelled') composer.status = 'error';
+    if (type === 'completed' || type === 'workflow-resume-completed')
+      composer.status = 'completed';
+    if (type === 'error' || type === 'workflow-resume-cancelled')
+      composer.status = 'error';
     renderComposer(composer);
   }
 
   function connect() {
     if (state.source) return;
-    connectionState.textContent = 'Connecting';
+    setConnectionState('Connecting', 'connecting');
     state.source = new EventSource(state.streamUrl);
-    state.source.onopen = () => { connectionState.textContent = 'Connected'; log('SSE connected'); };
-    state.source.onmessage = (event) => { try { handleEvent(event.data); } catch (error) { log('stream parse failure', error.message); } };
-    state.source.onerror = () => { connectionState.textContent = state.source?.readyState === EventSource.CONNECTING ? 'Reconnecting' : 'Error'; log('SSE connection error'); };
+    state.source.onopen = () => {
+      setConnectionState('Connected', 'connected');
+      log('SSE connected');
+    };
+    state.source.onmessage = (event) => {
+      try {
+        handleEvent(event.data);
+      } catch (error) {
+        log('stream parse failure', error.message);
+      }
+    };
+    state.source.onerror = () => {
+      const reconnecting = state.source?.readyState === EventSource.CONNECTING;
+      setConnectionState(
+        reconnecting ? 'Reconnecting' : 'Error',
+        reconnecting ? 'reconnecting' : 'error',
+      );
+      log('SSE connection error');
+    };
   }
 
   function reset() {
@@ -286,102 +423,136 @@
     state.composers.clear();
     state.activeMessageId = null;
     state.lastSequenceByStream.clear();
-    if (timeline) timeline.innerHTML = '<p class="empty-state">Waiting for stream events.</p>';
+    if (timeline)
+      timeline.innerHTML =
+        '<p class="empty-state">Waiting for stream events.</p>';
     if (debugOutput) debugOutput.textContent = 'No raw envelopes received.';
     if (approvalPanel) approvalPanel.hidden = true;
-    if (approvalContent) approvalContent.textContent = 'No approval is waiting.';
-    connectionState.textContent = 'Disconnected';
+    if (approvalContent)
+      approvalContent.textContent = 'No approval is waiting.';
+    setConnectionState('Disconnected', 'disconnected');
   }
 
   document.getElementById('reset-stream')?.addEventListener('click', reset);
-  document.querySelectorAll('[data-copy-text]').forEach((button) => {
-    button.addEventListener('click', () => {
-      const input = document.querySelector('#query');
-      if (!(input instanceof HTMLTextAreaElement)) return;
-      input.value = button.dataset.copyText || '';
-      input.focus();
-    });
-  });
   document.querySelectorAll('[data-project-action]').forEach((button) => {
     button.addEventListener('click', async () => {
       const action = button.dataset.projectAction;
       const projectId = button.dataset.projectId;
       const logTarget = document.getElementById('project-job-log');
+      button.disabled = true;
+      const originalLabel = button.textContent;
+      button.textContent = 'Working…';
       try {
-        const response = await fetch(`/testing/projects/${projectId}/${action}`, { method: 'POST' });
+        const response = await fetch(
+          `/testing/projects/${projectId}/${action}`,
+          { method: 'POST' },
+        );
         const job = await response.json();
-        if (!response.ok) throw new Error(job.message || `HTTP ${response.status}`);
+        if (!response.ok)
+          throw new Error(job.message || `HTTP ${response.status}`);
         if (logTarget) logTarget.textContent = `Job ${job.job_id} queued.`;
         log(`project ${action} requested`, job.job_id);
         if (job.job_id) {
           const poll = async () => {
-            const statusResponse = await fetch(`/testing/projects/${projectId}/jobs/${job.job_id}`);
+            const statusResponse = await fetch(
+              `/testing/projects/${projectId}/jobs/${job.job_id}`,
+            );
             const status = await statusResponse.json().catch(() => null);
             if (!statusResponse.ok || !status || !status.state) {
               if (logTarget) logTarget.textContent = 'Job status unavailable.';
               log('project job status unavailable', job.job_id);
               return;
             }
-            if (logTarget) logTarget.textContent = `Job status: ${status.state}`;
-            if (status.state === 'queued' || status.state === 'active') window.setTimeout(poll, 1200);
+            if (logTarget)
+              logTarget.textContent = `Job status: ${status.state}`;
+            if (status.state === 'queued' || status.state === 'active')
+              window.setTimeout(poll, 1200);
           };
           await poll();
         }
-      } catch (error) { if (logTarget) logTarget.textContent = `Project action failed: ${error.message}`; }
+      } catch (error) {
+        if (logTarget)
+          logTarget.textContent = `Project action failed: ${error.message}`;
+      } finally {
+        button.disabled = false;
+        button.textContent = originalLabel;
+      }
     });
   });
-  document.querySelector('[data-project-rename]')?.addEventListener('submit', async (event) => {
-    event.preventDefault();
-    const form = event.currentTarget;
-    try {
-      const response = await fetch(form.action, {
-        method: 'PATCH',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ name: form.querySelector('[name="name"]').value }),
-      });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      log('project renamed');
-      window.location.reload();
-    } catch (error) {
-      log('project rename failed', error.message);
-    }
-  });
-  document.querySelector('[data-project-delete]')?.addEventListener('click', async (event) => {
-    const button = event.currentTarget;
-    if (!window.confirm('Delete this project? It must be stopped first.')) return;
-    button.disabled = true;
-    try {
-      const response = await fetch(`/testing/projects/${button.dataset.projectId}`, {
-        method: 'DELETE',
-      });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      window.location.href = '/testing';
-    } catch (error) {
-      button.disabled = false;
-      log('project delete failed', error.message);
-    }
-  });
-  document.getElementById('message-form')?.addEventListener('submit', async (event) => {
-    event.preventDefault();
-    const form = event.currentTarget;
-    const input = form.querySelector('textarea');
-    const query = input.value.trim();
-    if (!query) return;
-    const messageId = makeMessageId();
-    state.activeMessageId = messageId;
-    ensureComposer(messageId);
-    const userCard = document.createElement('article');
-    userCard.className = 'chat-card chat-user';
-    userCard.innerHTML = `<div class="chat-meta">user</div><div class="chat-content">${escapeHtml(query)}</div>`;
-    transcript?.append(userCard);
-    input.value = '';
-    sendButton.disabled = true;
-    log('message submitted', messageId);
-    try {
-      const response = await fetch(form.action, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ query }) });
-      if (!response.ok && response.type !== 'opaqueredirect') throw new Error(`HTTP ${response.status}`);
-    } catch (error) { log('message submission failed', error.message); }
-    sendButton.disabled = false;
-  });
+  document
+    .querySelector('[data-project-rename]')
+    ?.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const form = event.currentTarget;
+      try {
+        const response = await fetch(form.action, {
+          method: 'PATCH',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            name: form.querySelector('[name="name"]').value,
+          }),
+        });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        log('project renamed');
+        window.location.reload();
+      } catch (error) {
+        log('project rename failed', error.message);
+      }
+    });
+  document
+    .querySelector('[data-project-delete]')
+    ?.addEventListener('click', async (event) => {
+      const button = event.currentTarget;
+      if (!window.confirm('Delete this project? It must be stopped first.'))
+        return;
+      button.disabled = true;
+      try {
+        const response = await fetch(
+          `/testing/projects/${button.dataset.projectId}`,
+          {
+            method: 'DELETE',
+          },
+        );
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        window.location.href = '/testing';
+      } catch (error) {
+        button.disabled = false;
+        log('project delete failed', error.message);
+      }
+    });
+  document
+    .getElementById('message-form')
+    ?.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const form = event.currentTarget;
+      const input = form.querySelector('textarea');
+      const query = input.value.trim();
+      if (!query) return;
+      const messageId = makeMessageId();
+      state.activeMessageId = messageId;
+      ensureComposer(messageId);
+      const userCard = document.createElement('article');
+      userCard.className = 'chat-card chat-user';
+      userCard.innerHTML = `<div class="chat-meta">user</div><div class="chat-content">${escapeHtml(query)}</div>`;
+      transcript?.append(userCard);
+      input.value = '';
+      sendButton.disabled = true;
+      const originalSendLabel = sendButton.innerHTML;
+      sendButton.innerHTML = 'Sending…';
+      log('message submitted', messageId);
+      try {
+        const response = await fetch(form.action, {
+          method: 'POST',
+          headers: { 'content-type': 'application/x-www-form-urlencoded' },
+          body: new URLSearchParams({ query }),
+        });
+        if (!response.ok && response.type !== 'opaqueredirect')
+          throw new Error(`HTTP ${response.status}`);
+      } catch (error) {
+        log('message submission failed', error.message);
+      }
+      sendButton.disabled = false;
+      sendButton.innerHTML = originalSendLabel;
+    });
   connect();
 })();
