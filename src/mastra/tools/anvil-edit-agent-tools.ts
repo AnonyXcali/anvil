@@ -3,6 +3,12 @@ import { z } from 'zod';
 import { AnvilAgentEditService } from 'src/anvil-agent-edit/anvil-agent-edit.service';
 import type { createEditWorkflow } from 'src/anvil-agent-edit/anvil-agent-edit.workflow';
 import { Z_EDIT_AGENT_WORKFLOW_INPUT } from 'src/anvil-agent-edit/anvil-agent-edit.types';
+import type { EditCleanupTarget } from 'src/anvil-agent/anvil-agent.types';
+import { AnvilHistoryService } from 'src/anvil-history/anvil-history.service';
+import {
+  appendHistoryBestEffort,
+  createAnvilHistoryTools,
+} from './anvil-history-tools';
 
 const Z_MUTATION_TOOL_OUTPUT = z.object({
   success: z.boolean(),
@@ -52,24 +58,86 @@ function getWorkflowResultError(result: { status: string }): string {
   return `Edit workflow ended with status ${result.status}`;
 }
 
+function isEditCleanupTarget(value: unknown): value is EditCleanupTarget {
+  if (typeof value !== 'object' || value === null) {
+    return false;
+  }
+
+  const target = value as Record<string, unknown>;
+  return (
+    typeof target.projectId === 'string' &&
+    typeof target.localFilePath === 'string' &&
+    (target.backupFilePath === undefined ||
+      typeof target.backupFilePath === 'string')
+  );
+}
+
+async function cleanUpFailedEdit(
+  context: ToolExecutionContext,
+  anvilAgentEditService: AnvilAgentEditService,
+): Promise<void> {
+  const targets = context.requestContext?.get('editCleanupTargets');
+  if (!Array.isArray(targets)) {
+    return;
+  }
+
+  for (const target of targets.slice().reverse()) {
+    if (!isEditCleanupTarget(target)) {
+      continue;
+    }
+
+    try {
+      if (target.backupFilePath) {
+        await anvilAgentEditService.cleanUp(
+          target.projectId,
+          target.backupFilePath,
+          target.localFilePath,
+        );
+      } else {
+        await anvilAgentEditService.cleanUpLocalFile(target.localFilePath);
+      }
+    } catch {
+      // Cleanup is best-effort and must not replace the original edit error.
+    }
+  }
+}
+
 export function createAnvilEditAgentTools(deps: {
   anvilAgentEditService: AnvilAgentEditService;
+  anvilHistoryService: AnvilHistoryService;
   editWorkflow: ReturnType<typeof createEditWorkflow>;
 }) {
-  const { anvilAgentEditService, editWorkflow } = deps;
+  const { anvilAgentEditService, anvilHistoryService, editWorkflow } = deps;
 
   return {
+    ...createAnvilHistoryTools(anvilHistoryService),
     run_edit_workflow: createTool({
       id: 'run_edit_workflow',
       description:
         'Run the edit workflow once with workflow-ready FILE_EDIT[] input. Runtime workflow state is managed by application code, not by the model.',
       inputSchema: z.object({
         inputData: Z_EDIT_AGENT_WORKFLOW_INPUT,
+        stagedFiles: z
+          .array(
+            z.object({
+              projectFilePath: z.string().min(1),
+              localFilePath: z.string().optional(),
+              content: z.string(),
+            }),
+          )
+          .optional(),
       }),
       outputSchema: Z_RUN_EDIT_WORKFLOW_OUTPUT,
       execute: async (inputData, context) => {
         try {
           getProjectId(context);
+
+          if (inputData.stagedFiles) {
+            context.requestContext?.set(
+              'cssStagedFiles',
+              inputData.stagedFiles,
+            );
+          }
 
           const hasRunEditWorkflow =
             context.requestContext?.get('hasRunEditWorkflow') === true;
@@ -95,10 +163,13 @@ export function createAnvilEditAgentTools(deps: {
           });
 
           if (result.status !== 'success') {
+            const error = getWorkflowResultError(result);
+            await cleanUpFailedEdit(context, anvilAgentEditService);
+            context.requestContext?.set('editWorkflowFailure', error);
             return {
               success: false,
               files: [],
-              error: getWorkflowResultError(result),
+              error,
             };
           }
 
@@ -108,7 +179,10 @@ export function createAnvilEditAgentTools(deps: {
             error: null,
           };
         } catch (error: unknown) {
-          return { success: false, files: [], error: getErrorMessage(error) };
+          const message = getErrorMessage(error);
+          await cleanUpFailedEdit(context, anvilAgentEditService);
+          context.requestContext?.set('editWorkflowFailure', message);
+          return { success: false, files: [], error: message };
         }
       },
     }),
@@ -121,15 +195,31 @@ export function createAnvilEditAgentTools(deps: {
       }),
       outputSchema: Z_MUTATION_TOOL_OUTPUT,
       execute: async (inputData, context) => {
+        const projectId = getProjectId(context);
         try {
           await anvilAgentEditService.createProjectFile(
-            getProjectId(context),
+            projectId,
             inputData.file_path,
           );
+          await appendHistoryBestEffort(anvilHistoryService, context, {
+            subject: 'Create project file',
+            status: 'success',
+            changesMade: `Created ${inputData.file_path}.`,
+            files: [inputData.file_path],
+            actor: 'anvil-edit-agent.create_file',
+          });
 
           return { success: true, error: null };
         } catch (error: unknown) {
-          return { success: false, error: getErrorMessage(error) };
+          const message = getErrorMessage(error);
+          await appendHistoryBestEffort(anvilHistoryService, context, {
+            subject: 'Create project file',
+            status: 'failed',
+            changesMade: message,
+            files: [inputData.file_path],
+            actor: 'anvil-edit-agent.create_file',
+          });
+          return { success: false, error: message };
         }
       },
     }),
@@ -142,15 +232,31 @@ export function createAnvilEditAgentTools(deps: {
       }),
       outputSchema: Z_MUTATION_TOOL_OUTPUT,
       execute: async (inputData, context) => {
+        const projectId = getProjectId(context);
         try {
           await anvilAgentEditService.createProjectFolder(
-            getProjectId(context),
+            projectId,
             inputData.folder_path,
           );
+          await appendHistoryBestEffort(anvilHistoryService, context, {
+            subject: 'Create project folder',
+            status: 'success',
+            changesMade: `Created ${inputData.folder_path}.`,
+            files: [inputData.folder_path],
+            actor: 'anvil-edit-agent.create_folder',
+          });
 
           return { success: true, error: null };
         } catch (error: unknown) {
-          return { success: false, error: getErrorMessage(error) };
+          const message = getErrorMessage(error);
+          await appendHistoryBestEffort(anvilHistoryService, context, {
+            subject: 'Create project folder',
+            status: 'failed',
+            changesMade: message,
+            files: [inputData.folder_path],
+            actor: 'anvil-edit-agent.create_folder',
+          });
+          return { success: false, error: message };
         }
       },
     }),
@@ -165,15 +271,31 @@ export function createAnvilEditAgentTools(deps: {
       }),
       outputSchema: Z_MUTATION_TOOL_OUTPUT,
       execute: async (inputData, context) => {
+        const projectId = getProjectId(context);
         try {
           await anvilAgentEditService.deleteProjectFile(
-            getProjectId(context),
+            projectId,
             inputData.file_path,
           );
+          await appendHistoryBestEffort(anvilHistoryService, context, {
+            subject: 'Delete project file',
+            status: 'success',
+            changesMade: `Deleted ${inputData.file_path}. Reason: ${inputData.reason}`,
+            files: [inputData.file_path],
+            actor: 'anvil-edit-agent.delete_file',
+          });
 
           return { success: true, error: null };
         } catch (error: unknown) {
-          return { success: false, error: getErrorMessage(error) };
+          const message = getErrorMessage(error);
+          await appendHistoryBestEffort(anvilHistoryService, context, {
+            subject: 'Delete project file',
+            status: 'failed',
+            changesMade: message,
+            files: [inputData.file_path],
+            actor: 'anvil-edit-agent.delete_file',
+          });
+          return { success: false, error: message };
         }
       },
     }),
@@ -188,15 +310,31 @@ export function createAnvilEditAgentTools(deps: {
       }),
       outputSchema: Z_MUTATION_TOOL_OUTPUT,
       execute: async (inputData, context) => {
+        const projectId = getProjectId(context);
         try {
           await anvilAgentEditService.deleteProjectFolder(
-            getProjectId(context),
+            projectId,
             inputData.folder_path,
           );
+          await appendHistoryBestEffort(anvilHistoryService, context, {
+            subject: 'Delete project folder',
+            status: 'success',
+            changesMade: `Deleted ${inputData.folder_path}. Reason: ${inputData.reason}`,
+            files: [inputData.folder_path],
+            actor: 'anvil-edit-agent.delete_folder',
+          });
 
           return { success: true, error: null };
         } catch (error: unknown) {
-          return { success: false, error: getErrorMessage(error) };
+          const message = getErrorMessage(error);
+          await appendHistoryBestEffort(anvilHistoryService, context, {
+            subject: 'Delete project folder',
+            status: 'failed',
+            changesMade: message,
+            files: [inputData.folder_path],
+            actor: 'anvil-edit-agent.delete_folder',
+          });
+          return { success: false, error: message };
         }
       },
     }),

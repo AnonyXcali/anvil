@@ -5,16 +5,16 @@ import { BullModule } from '@nestjs/bullmq';
 import { DbModule } from 'src/db/db.module';
 import { ChannelsModule } from 'src/channels/channels.module';
 import { ConversationProcessor } from './conversation.processor';
-import { LlmModule } from 'src/llm/llm.module';
 import { JobModule } from 'src/job/job.module';
+import { ProjectModule } from 'src/project/project.module';
 
 @Module({
   imports: [
     SharedredisModule,
     DbModule,
     ChannelsModule,
-    LlmModule,
     JobModule,
+    ProjectModule,
     BullModule.registerQueue({
       name: 'conversation-processor',
     }),

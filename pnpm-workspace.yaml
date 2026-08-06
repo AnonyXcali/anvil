@@ -2,6 +2,7 @@ packages:
   - '.'
 
 allowBuilds:
+  '@lightpanda/browser': true
   '@nestjs/core': true
   cpu-features: true
   esbuild: true

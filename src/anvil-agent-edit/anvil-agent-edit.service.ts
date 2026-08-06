@@ -1,5 +1,15 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { readFile, stat, unlink, writeFile } from 'fs/promises';
+import {
+  lstat,
+  readFile,
+  realpath,
+  rename,
+  stat,
+  unlink,
+  writeFile,
+} from 'fs/promises';
+import { randomUUID } from 'crypto';
+import { resolve, sep } from 'path';
 import { SshService } from 'src/ssh/ssh.service';
 
 @Injectable()
@@ -61,7 +71,52 @@ export class AnvilAgentEditService {
 
     lines.splice(startIndex, deleteCount, ...replacementLines);
 
-    await writeFile(localFilePath, lines.join('\n'), 'utf8');
+    return await this.replaceLocalFile(localFilePath, lines.join('\n'));
+  }
+
+  async replaceLocalFile(
+    localFilePath: string,
+    content: string,
+  ): Promise<string> {
+    if (!localFilePath.trim()) {
+      throw new Error('Local file path is not provided');
+    }
+
+    const tempRoot = resolve(process.cwd(), 'temp');
+    const requestedPath = resolve(localFilePath);
+    const tempRootRealPath = await realpath(tempRoot);
+    const tempRootPrefix = `${tempRootRealPath}${sep}`;
+
+    if (!requestedPath.startsWith(`${tempRoot}${sep}`)) {
+      throw new Error('Local file path must be inside the temporary root');
+    }
+
+    const localFileRealPath = await realpath(localFilePath);
+    if (!localFileRealPath.startsWith(tempRootPrefix)) {
+      throw new Error('Local file path must be inside the temporary root');
+    }
+
+    const localFileStat = await lstat(localFilePath);
+    if (!localFileStat.isFile()) {
+      throw new Error('Local file path must point to a regular file');
+    }
+
+    const tempFilePath = `${localFilePath}.${randomUUID()}.tmp`;
+
+    try {
+      await writeFile(tempFilePath, content, {
+        encoding: 'utf8',
+        flag: 'wx',
+      });
+      await rename(tempFilePath, localFilePath);
+    } catch (error: unknown) {
+      try {
+        await unlink(tempFilePath);
+      } catch {
+        // Preserve the original replacement failure.
+      }
+      throw error;
+    }
 
     return localFilePath;
   }
@@ -137,6 +192,26 @@ export class AnvilAgentEditService {
     );
   }
 
+  async getRelatedStyleFiles(
+    projectId: string,
+    cssFilePath: string,
+  ): Promise<Array<{ projectFilePath: string; content: string }>> {
+    const cssFileName = cssFilePath.split('/').pop() ?? cssFilePath;
+    const projectFiles = await this.sshService.findProjectFilesContaining(
+      projectId,
+      cssFileName,
+    );
+    return await Promise.all(
+      projectFiles.map(async (projectFilePath) => ({
+        projectFilePath,
+        content: await this.sshService.readProjectFile(
+          projectId,
+          projectFilePath,
+        ),
+      })),
+    );
+  }
+
   async readLocal(
     path: string,
     line_range?: { start: number; end: number },
@@ -166,20 +241,43 @@ export class AnvilAgentEditService {
 
     try {
       await this.sshService.deleteProjectFile(projectId, backFilePath);
-
-      const localFileStat = await stat(localFilePath);
-
-      if (!localFileStat.isFile()) {
-        this.logger.error('Local cleanup path is not a file');
-        return;
-      }
-
-      await unlink(localFilePath);
     } catch (e: unknown) {
-      this.logger.error('Anvil agent edit cleanup failed');
+      this.logger.error('Remote backup cleanup failed');
       if (e instanceof Error) {
         this.logger.error(e.name);
         this.logger.error(e.message);
+      }
+    }
+
+    await this.cleanUpLocalFile(localFilePath);
+  }
+
+  async cleanUpLocalFile(localFilePath: string): Promise<void> {
+    if (!localFilePath.trim()) {
+      return;
+    }
+
+    try {
+      const tempRoot = resolve(process.cwd(), 'temp');
+      const resolvedPath = resolve(localFilePath);
+      const realTempRoot = await realpath(tempRoot);
+      const realLocalPath = await realpath(localFilePath);
+      if (
+        !resolvedPath.startsWith(`${tempRoot}${sep}`) ||
+        !realLocalPath.startsWith(`${realTempRoot}${sep}`)
+      ) {
+        this.logger.error('Local cleanup path is outside the temporary root');
+        return;
+      }
+
+      const localFileStat = await stat(localFilePath);
+      if (localFileStat.isFile()) {
+        await unlink(localFilePath);
+      }
+    } catch (error: unknown) {
+      this.logger.error('Local temporary file cleanup failed');
+      if (error instanceof Error) {
+        this.logger.error(error.message);
       }
     }
   }

@@ -19,22 +19,36 @@ import { anvilPlanningAgent } from './agents/anvil-planning-agent';
 import { createFrontendEngineeringWorkflow } from 'src/anvil-agent-supervisor/anvil-agent-supervisor.workflow';
 import { createEditWorkflow } from 'src/anvil-agent-edit/anvil-agent-edit.workflow';
 import { AnvilAgentEditService } from 'src/anvil-agent-edit/anvil-agent-edit.service';
+import { AnvilHistoryService } from 'src/anvil-history/anvil-history.service';
 import { createAnvilEditingAgent } from './agents/anvil-editing-agent';
 import { createAnvilVerifyAgent } from './agents/anvil-verify-agent';
+import { createAnvilConversationAgent } from './agents/anvil-convo-agent';
+import { createAnvilIntentAgent } from './agents/anvil-intent-agent';
+import type { AppEnv } from 'src/config/env.validation';
 
 export async function createMastra(dep: {
   anvilAgentSearchService: AnvilAgentSearchService;
   anvilAgentEditService: AnvilAgentEditService;
+  anvilHistoryService: AnvilHistoryService;
+  env: Pick<
+    AppEnv,
+    'EXA_KEY' | 'FIRECRAWL_KEY' | 'LIGHTPANDA_KEY' | 'LIGHTPANDA_ENDPOINT'
+  >;
+  conversationModel: string;
 }): Promise<Mastra> {
   const frontendEngineeringWorkflow = createFrontendEngineeringWorkflow();
   const editWorkflow = createEditWorkflow({
     anvilAgentEditService: dep.anvilAgentEditService,
+    anvilHistoryService: dep.anvilHistoryService,
   });
 
   return new Mastra({
     workflows: { weatherWorkflow, frontendEngineeringWorkflow, editWorkflow },
     agents: {
       weatherAgent,
+      [AGENT_DIRECTORY.anvilIntentAgent]: createAnvilIntentAgent({
+        model: dep.conversationModel,
+      }),
       [AGENT_DIRECTORY.anvilSearchAgent]: createAnvilAgent(dep),
       [AGENT_DIRECTORY.anvilSupervisorAgent]: createAnvilSupervisorAgent({
         frontendEngineeringWorkflow,
@@ -42,10 +56,17 @@ export async function createMastra(dep: {
       [AGENT_DIRECTORY.anvilPlanningAgent]: anvilPlanningAgent,
       [AGENT_DIRECTORY.anvilEditingAgent]: createAnvilEditingAgent({
         anvilAgentEditService: dep.anvilAgentEditService,
+        anvilHistoryService: dep.anvilHistoryService,
         editWorkflow,
       }),
       [AGENT_DIRECTORY.anvilVerifyAgent]: createAnvilVerifyAgent({
         anvilAgentEditService: dep.anvilAgentEditService,
+        anvilHistoryService: dep.anvilHistoryService,
+      }),
+      [AGENT_DIRECTORY.anvilConversationAgent]: createAnvilConversationAgent({
+        anvilAgentSearchService: dep.anvilAgentSearchService,
+        env: dep.env,
+        model: dep.conversationModel,
       }),
     },
     storage: new MastraCompositeStore({

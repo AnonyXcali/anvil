@@ -104,7 +104,7 @@ function countWorkflowEditToolEvents(events: unknown): number {
 
     const payload = event.payload;
 
-    return isRecord(payload) && payload.toolName === 'workflow-editWorkflow';
+    return isRecord(payload) && payload.toolName === 'run_edit_workflow';
   }).length;
 }
 
@@ -161,8 +161,22 @@ function compressFileEdits(files: FINAL_RESPONSE_SHAPE[]): EDIT_AGENT_INPUT {
       throw new Error('File path is not provided');
     }
 
-    assertPositiveInteger(file.line_range.startRange, 'startRange');
-    assertPositiveInteger(file.line_range.endRange, 'endRange');
+    const isWholeFileReplacement = file.action_tokens.includes('replace_file');
+    if (isWholeFileReplacement) {
+      if (
+        !Number.isInteger(file.line_range.startRange) ||
+        !Number.isInteger(file.line_range.endRange) ||
+        file.line_range.startRange !== 0 ||
+        file.line_range.endRange !== 0
+      ) {
+        throw new Error(
+          `replace_file for ${filePath} must use line range 0 to 0`,
+        );
+      }
+    } else {
+      assertPositiveInteger(file.line_range.startRange, 'startRange');
+      assertPositiveInteger(file.line_range.endRange, 'endRange');
+    }
 
     if (file.line_range.startRange > file.line_range.endRange) {
       throw new Error('startRange must be less than or equal to endRange');
@@ -180,6 +194,20 @@ function compressFileEdits(files: FINAL_RESPONSE_SHAPE[]): EDIT_AGENT_INPUT {
         hash: null,
         file_exists: file.file_exists,
       } satisfies EDIT_AGENT_INPUT[number]);
+
+    const hasWholeFileReplacement = existingFileEdit.instructions.some(
+      (instruction) => instruction.action_tokens.includes('replace_file'),
+    );
+    if (isWholeFileReplacement && existingFileEdit.instructions.length > 0) {
+      throw new Error(
+        `replace_file must be the only instruction for ${filePath}`,
+      );
+    }
+    if (hasWholeFileReplacement) {
+      throw new Error(
+        `replace_file must be the only instruction for ${filePath}`,
+      );
+    }
 
     if (existingFileEdit.file_exists !== file.file_exists) {
       throw new Error(`Conflicting file_exists values for ${filePath}`);
@@ -331,13 +359,30 @@ const createEditStep = () => {
       const editAgentRequestContext = new RequestContext<AnvilAgentContext>();
       editAgentRequestContext.set('projectId', projectId);
       editAgentRequestContext.set('callCount', 0);
+      editAgentRequestContext.set('editProgress', async (event) => {
+        try {
+          await writer.custom({
+            type: 'edit_progress',
+            payload: event,
+          });
+        } catch {
+          // Progress is best-effort and must not change the edit result.
+        }
+      });
+      editAgentRequestContext.set('editDiagnostic', async (event) => {
+        try {
+          await writer.custom(event);
+        } catch {
+          // Diagnostics are best-effort and must not change the edit result.
+        }
+      });
 
       const editAgent = mastra.getAgent(AGENT_DIRECTORY.anvilEditingAgent);
-      // TODO: Investigate why anvilEditingAgent may call workflow-editWorkflow multiple times for one edit handoff.
+      // TODO: Investigate why anvilEditingAgent may call run_edit_workflow multiple times for one edit handoff.
       const stream = await editAgent.stream(
         [
           'Process this normalized FILE_EDIT[] payload.',
-          'Use your tools for missing file or folder prerequisites, then invoke workflow-editWorkflow when the payload is workflow-ready.',
+          'Use your tools for missing file or folder prerequisites, then invoke run_edit_workflow when the payload is workflow-ready.',
           'Return a concise non-technical summary of the completed changes.',
           JSON.stringify(inputData, null, 2),
         ].join('\n\n'),
@@ -351,6 +396,13 @@ const createEditStep = () => {
       const diagnostics = await collectEditAgentDiagnostics(stream);
       await writeEditAgentDiagnostics(writer, diagnostics);
       await writeEditWorkflowInvocationFailure(writer, diagnostics);
+
+      const editWorkflowFailure = editAgentRequestContext.get(
+        'editWorkflowFailure',
+      );
+      if (editWorkflowFailure) {
+        throw new Error(editWorkflowFailure);
+      }
 
       return {
         response: diagnostics.response || 'Changes were applied.',

@@ -9,21 +9,20 @@ import {
 } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Observable } from 'rxjs';
+import { randomUUID } from 'node:crypto';
 import { Kysely } from 'kysely';
 import { KYSELY_DB } from 'src/tokens';
 import type { DB, PreviewPlatformWorkflowJobStatus } from 'src/db/db.types';
 import { Queue } from 'bullmq';
 import { ChannelsService } from 'src/channels/channels.service';
 import { MastraService } from '@mastra/nestjs';
-import { generateKeys } from 'src/utils';
 import { StreamEventType } from 'src/anvil-agent/anvil-agent-chunk.dictionary';
 import {
   buildAppStreamEvent,
-  buildStreamEnvelope,
   getWorkflowFinishStatus,
   getStreamChunkType,
-  isEmptyStreamChunk,
 } from 'src/anvil-agent/anvil-agent-streaming.helpers';
+import { AnvilAgentStreamPublisher } from 'src/anvil-agent/anvil-agent-stream-publisher.service';
 import type { Json } from 'src/db/db.types';
 
 /**
@@ -42,9 +41,11 @@ export class CoreService {
       conversation_id: string;
       query: string;
       project_id: string;
+      stream_id: string;
     }>,
     private readonly channelService: ChannelsService,
     private readonly mastraService: MastraService,
+    private readonly streamPublisher: AnvilAgentStreamPublisher,
   ) {}
 
   async handleFlowInitiation(query: string, userId: string, projectId: string) {
@@ -74,12 +75,14 @@ export class CoreService {
     //create a job to intent processor and queue it
     //the job takes the query and the conversation_id futher.
     this.logger.log('Queueing job.....');
+    const streamId = randomUUID();
     const job = await this.intentQueue.add(
       'classify-intent',
       {
         conversation_id: conversationId,
         query,
         project_id: projectId,
+        stream_id: streamId,
       },
       {
         attempts: 1,
@@ -113,6 +116,7 @@ export class CoreService {
     return {
       job_id: job.id, //TODO: remove the job_id
       conversation_id: conversationId,
+      stream_id: streamId,
     };
   }
 
@@ -227,32 +231,17 @@ export class CoreService {
     conversationId: string;
     approved: boolean;
   }): Promise<void> {
-    const { seqKey, listKey, metaKey, channelKey } = generateKeys(
-      conversationId,
-      `${approvalRequestId}:workflow-resume`,
-    );
     const streamId = `${approvalRequestId}:workflow-resume`;
 
     const publishChunk = async (chunk: unknown) => {
-      if (isEmptyStreamChunk(chunk)) {
-        return;
-      }
-
-      await this.channelService.publishAndStoreChunk(
-        JSON.stringify(
-          buildStreamEnvelope({
-            chunk,
-            conversationId,
-            source: 'workflow-resume',
-            approvalRequestId,
-          }),
-        ),
-        seqKey,
-        listKey,
-        metaKey,
-        channelKey,
-        { streamId },
-      );
+      await this.streamPublisher.publish({
+        chunk,
+        conversationId,
+        jobId: `${approvalRequestId}:workflow-resume`,
+        source: 'workflow-resume',
+        approvalRequestId,
+        streamId,
+      });
     };
     const publishAppEvent = async (chunk: unknown) => {
       const appEvent = buildAppStreamEvent(chunk);
@@ -421,7 +410,10 @@ export class CoreService {
         'preview_platform.project.id',
         'preview_platform.conversation.project_id',
       )
-      .select('preview_platform.conversation.id')
+      .select([
+        'preview_platform.conversation.id',
+        'preview_platform.conversation.project_id',
+      ])
       .where('preview_platform.conversation.id', '=', conversationId)
       .where('preview_platform.project.user_id', '=', userId)
       .executeTakeFirst();
@@ -442,12 +434,14 @@ export class CoreService {
 
     //use the conversationId to get existing messages
     this.logger.log('Queueing job.....');
+    const streamId = randomUUID();
     const job = await this.intentQueue.add(
       'classify-intent',
       {
         conversation_id: conversationId,
         query,
-        project_id: projectId,
+        project_id: ownedConversation.project_id,
+        stream_id: streamId,
       },
       {
         attempts: 1,
@@ -479,6 +473,7 @@ export class CoreService {
 
     return {
       conversation_id: conversationId,
+      stream_id: streamId,
     };
   }
 }

@@ -48,6 +48,16 @@ export class ProjectService {
       .executeTakeFirstOrThrow();
   }
 
+  async getPreviewUrl(projectId: string): Promise<string | null> {
+    const project = await this.db
+      .selectFrom('preview_platform.project')
+      .select('preview_url')
+      .where('id', '=', projectId)
+      .executeTakeFirst();
+
+    return project?.preview_url ?? null;
+  }
+
   async insert(name: string, userId: string) {
     const port = await this.portService.acquirePort();
     const { id: projectId } = await this.db

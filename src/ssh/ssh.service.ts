@@ -788,7 +788,18 @@ EOF`,
       throw new Error('Hash is not provided');
     }
 
-    const localFileStat = await stat(localFilePath);
+    const tempRoot = resolve(process.cwd(), 'temp');
+    const resolvedLocalPath = resolve(localFilePath);
+    const realTempRoot = await realpath(tempRoot);
+    const realLocalPath = await realpath(localFilePath);
+    if (
+      !resolvedLocalPath.startsWith(`${tempRoot}${sep}`) ||
+      !realLocalPath.startsWith(`${realTempRoot}${sep}`)
+    ) {
+      throw new Error('Local file path must resolve inside the temp directory');
+    }
+
+    const localFileStat = await stat(realLocalPath);
 
     if (!localFileStat.isFile()) {
       throw new Error('Local file path must point to a file');
@@ -874,7 +885,7 @@ EOF`,
         );
       }
 
-      await sshNode.putFile(localFilePath, remoteFilePath);
+      await sshNode.putFile(realLocalPath, remoteFilePath);
 
       await this.runStep(
         sshNode,
@@ -1227,6 +1238,116 @@ EOF`,
         this.logger.error(e.message);
       }
       throw e;
+    } finally {
+      sshNode.dispose();
+    }
+  }
+
+  async readProjectFile(projectId: string, filePath: string): Promise<string> {
+    this.validateProjectId(projectId);
+    const normalizedFilePath = this.normalizeProjectRelativePath(
+      filePath,
+      'File path',
+    );
+    const sshNode = new NodeSSH();
+    const remoteWorkspaceDir = this.getProjectWorkspaceDir(projectId);
+
+    try {
+      await sshNode.connect({
+        host: process.env.SSH_HOST!,
+        port: Number(process.env.SSH_PORT ?? 22),
+        username: process.env.SSH_USERNAME!,
+        privateKey: readFileSync(process.env.SSH_PRIVATE_KEY_PATH!, 'utf8'),
+      });
+
+      const result = await this.runStep(
+        sshNode,
+        'read-project-file',
+        [
+          `cd ${this.shellQuote(remoteWorkspaceDir)}`,
+          `test -f ${this.shellQuote(normalizedFilePath)}`,
+          `cat -- ${this.shellQuote(normalizedFilePath)}`,
+        ].join(' && '),
+        {},
+      );
+
+      return result.stdout;
+    } finally {
+      sshNode.dispose();
+    }
+  }
+
+  async findProjectFilesContaining(
+    projectId: string,
+    query: string,
+  ): Promise<string[]> {
+    this.validateProjectId(projectId);
+    if (!query.trim()) {
+      return [];
+    }
+
+    const sshNode = new NodeSSH();
+    const remoteWorkspaceDir = this.getProjectWorkspaceDir(projectId);
+    try {
+      await sshNode.connect({
+        host: process.env.SSH_HOST!,
+        port: Number(process.env.SSH_PORT ?? 22),
+        username: process.env.SSH_USERNAME!,
+        privateKey: readFileSync(process.env.SSH_PRIVATE_KEY_PATH!, 'utf8'),
+      });
+      const result = await this.runStep(
+        sshNode,
+        'find-project-files-containing',
+        [
+          `cd ${this.shellQuote(remoteWorkspaceDir)}`,
+          `rg -l --glob '*.tsx' --glob '*.jsx' --fixed-strings -- ${this.shellQuote(query)} . || true`,
+        ].join(' && '),
+        {},
+      );
+      return result.stdout
+        .split('\n')
+        .map((filePath) => filePath.trim().replace(/^\.\//, ''))
+        .filter(Boolean);
+    } finally {
+      sshNode.dispose();
+    }
+  }
+
+  async appendProjectFile(
+    projectId: string,
+    filePath: string,
+    content: string,
+  ): Promise<string> {
+    this.validateProjectId(projectId);
+    const normalizedFilePath = this.normalizeProjectRelativePath(
+      filePath,
+      'File path',
+    );
+    const sshNode = new NodeSSH();
+    const remoteWorkspaceDir = this.getProjectWorkspaceDir(projectId);
+    const encodedContent = Buffer.from(content, 'utf8').toString('base64');
+
+    try {
+      await sshNode.connect({
+        host: process.env.SSH_HOST!,
+        port: Number(process.env.SSH_PORT ?? 22),
+        username: process.env.SSH_USERNAME!,
+        privateKey: readFileSync(process.env.SSH_PRIVATE_KEY_PATH!, 'utf8'),
+      });
+
+      const result = await this.runStep(
+        sshNode,
+        'append-project-file',
+        [
+          `cd ${this.shellQuote(remoteWorkspaceDir)}`,
+          `test -f ${this.shellQuote(normalizedFilePath)}`,
+          `printf '%s' ${this.shellQuote(encodedContent)} | base64 --decode >> ${this.shellQuote(normalizedFilePath)}`,
+          `cat -- ${this.shellQuote(normalizedFilePath)}`,
+        ].join(' && '),
+        {},
+      );
+
+      return result.stdout;
     } finally {
       sshNode.dispose();
     }

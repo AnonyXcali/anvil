@@ -1,3 +1,8 @@
+/**
+ * Stable application event names sent over Redis/SSE and consumed by the UI.
+ * Mastra's raw chunk names are intentionally kept separate from this contract.
+ * tool-call-input-streaming
+ */
 export const StreamEventType = {
   TEXT_DELTA: 'text-delta',
   TOOL_CALL: 'tool-call',
@@ -16,6 +21,8 @@ export const StreamEventType = {
   TOOL_STATUS: 'tool_status',
   VERIFICATION_STATUS: 'verification_status',
   COMPLETED: 'completed',
+  TOOL_CALL_START: 'tool-call-input-streaming-start',
+  TOOL_CALL_END: 'tool-call-input-streaming-end',
 } as const;
 
 export type StreamEventType =

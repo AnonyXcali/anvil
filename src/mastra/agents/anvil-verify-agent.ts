@@ -2,6 +2,7 @@ import { Agent, type ToolsInput } from '@mastra/core/agent';
 import { Memory } from '@mastra/memory';
 import { AnvilAgentEditService } from 'src/anvil-agent-edit/anvil-agent-edit.service';
 import { createAnvilVerifyAgentTools } from '../tools/anvil-verify-agent-tools';
+import { AnvilHistoryService } from 'src/anvil-history/anvil-history.service';
 
 type AnvilVerifyAgentContext = {
   localFilePath: string;
@@ -10,6 +11,7 @@ type AnvilVerifyAgentContext = {
 
 export function createAnvilVerifyAgent(deps: {
   anvilAgentEditService: AnvilAgentEditService;
+  anvilHistoryService: AnvilHistoryService;
 }) {
   const anvilVerifyAgent = new Agent<
     'anvil-verify-agent',
@@ -28,7 +30,8 @@ export function createAnvilVerifyAgent(deps: {
 
       TOOLS
       1) edit_file
-      2) read_local_file
+      2) replace_file
+      3) read_local_file
 
       INSTRUCTIONS:
 
@@ -44,6 +47,7 @@ export function createAnvilVerifyAgent(deps: {
       Do not rewrite unrelated code.
       Do not touch remote files.
       Do not call tools if the current local file already satisfies the precise_instruction.
+      For a CSS instruction that requires a complete stylesheet rewrite, use replace_file with the exact complete file content.
 
       Each edit goes through a strict rubric scorer, and if the criteria is unmet a feedback would be provided on the file content that is provided to you,
       and how it can be fixed. In that use the edit_file tool to fix the issues described:
@@ -107,15 +111,19 @@ export function createAnvilVerifyAgent(deps: {
       - Always respond with the response instruction above.
       - When rubric feedback reports unmet criteria, strictly follow the instructions above.
       - If content already satisfies rubric: respond with current file content.
-      - If rubric feedback reports unmet criteria: undestand feedback, call read_local_file, call edit_file, call read_local_file again, then respond with the updated file content.
+      - If rubric feedback reports unmet criteria: understand feedback, call read_local_file, call edit_file or replace_file as appropriate, call read_local_file again, then respond with the updated file content.
       - Never respond with tool schemas, JSON instructions, or procedural text as the final answer.
+      - After the complete verification process, use append_history to record whether verification succeeded or failed. The workflow also records this outcome authoritatively.
 
       Failure state -
       - Strictly fail if read_local_file has error stated (meaning its not null) or content is null, which is invalid state.
       `;
     },
     model: 'openai/gpt-5.6-luna',
-    tools: createAnvilVerifyAgentTools(deps.anvilAgentEditService),
+    tools: createAnvilVerifyAgentTools(
+      deps.anvilAgentEditService,
+      deps.anvilHistoryService,
+    ),
     memory: new Memory(),
   });
 

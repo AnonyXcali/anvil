@@ -2,6 +2,8 @@ import { Agent } from '@mastra/core/agent';
 import { Memory } from '@mastra/memory';
 import { AnvilAgentSearchService } from 'src/anvil-agent/anvil-agent-search.service';
 import { createAnvilAgentSearchTool } from '../tools/anvil-agent-search-tool';
+import { createAnvilHistoryTools } from '../tools/anvil-history-tools';
+import { AnvilHistoryService } from 'src/anvil-history/anvil-history.service';
 import { ANVIL_SYSTEM_AGENT_PROMPT } from './anvil-system-agent.prompt';
 
 //TODO: reduce and make the system prompt more consise. Current token usage exceeding 30000 tokens.
@@ -92,7 +94,7 @@ const INTRODUCTION = `
           endRange: number;
         };
         file_exists: boolean;
-        action_tokens: FILE_MODIFICATION_TOKENS[]; //'import' | 'add' | 'delete' | 'replace'
+        action_tokens: FILE_MODIFICATION_TOKENS[]; //'import' | 'add' | 'delete' | 'replace' | 'replace_file'
         precise_instruction: string;
         code: string | null;
       }>;
@@ -104,7 +106,7 @@ const INTRODUCTION = `
   };
 `;
 
-const NEW_INSTRUCTION = `
+const TOOL_DESCRIPTION = `
   Instructions
   - GOAL: Convert user query into technical instruction.
   - Your scope of search should be strictly within the '/src' directory, unless the task involves searching files that
@@ -694,8 +696,7 @@ Final response -
      "error":null
   }
 
-  Also, if the entire file requires change, make sure to have startRange 0 and endRange be the maximum positive integer of the last line.
-  The endRange must be exactly the last line, because if the endRange is not provided properly, it would lead to invalid file change.
+  If the entire file requires change, for any source or styling file use action_tokens containing replace_file, line_range startRange 0 and endRange 0, and provide the complete replacement file in code. Use positive inclusive ranges for all other edits. Never combine replace_file with a last-line range.
 
   4) response.length -> content_search tool invocation returns no result or no relevant candidates are found.
 
@@ -855,7 +856,7 @@ const FAILURE_STATE_AND_RULES = `
 const EXISTING_ANVIL_SYSTEM_AGENT_PROMPT = `
     ${INTRODUCTION}
 
-    ${NEW_INSTRUCTION}
+    ${TOOL_DESCRIPTION}
 
     ${CONTENT_SEARCH_PRIORITISATION_PROMPT}
 
@@ -871,19 +872,24 @@ const ANVIL_SYSTEM_AGENT_PROMPTS = {
   alternate: ANVIL_SYSTEM_AGENT_PROMPT,
 } as const;
 
-const ACTIVE_ANVIL_SYSTEM_AGENT_PROMPT = ANVIL_SYSTEM_AGENT_PROMPTS.existing;
+const ACTIVE_ANVIL_SYSTEM_AGENT_PROMPT = ANVIL_SYSTEM_AGENT_PROMPTS.alternate;
 // To test the alternate prompt, switch to ANVIL_SYSTEM_AGENT_PROMPTS.alternate.
 
 export function createAnvilAgent(deps: {
   anvilAgentSearchService: AnvilAgentSearchService;
+  anvilHistoryService: AnvilHistoryService;
 }) {
+  const historyTools = createAnvilHistoryTools(deps.anvilHistoryService);
   const anvilSystemAgent = new Agent({
     id: 'anvil-search-agent',
     name: 'Anvil Search Agent',
     instructions: ACTIVE_ANVIL_SYSTEM_AGENT_PROMPT,
     model: 'openai/gpt-5.6-luna',
     tools: {
-      searchTool: createAnvilAgentSearchTool(deps.anvilAgentSearchService),
+      searchTool: createAnvilAgentSearchTool(deps.anvilAgentSearchService, {
+        requireHistory: true,
+      }),
+      read_history: historyTools.read_history,
     },
     memory: new Memory(),
     hooks: {
