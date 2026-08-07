@@ -67,9 +67,27 @@ http://localhost:3000/testing/auth
 
 The main user flow starts with a project workspace. A project owns its conversation, generated files, active preview port, container state, and job history.
 
-`src/core/` receives user messages, classifies intent, and routes work to either normal conversation handling or the agentic offload path. Long-running work runs through BullMQ queues. Redis powers queueing and Server-Sent Events, while Postgres stores users, projects, conversations, messages, jobs, generated files, and workflow run state.
+`src/core/` receives user messages, stores the conversation context, and routes each request to one of two paths. Short conversational requests are handled by the conversation agent and streamed back as text. Project-change requests are handled asynchronously by the supervisor flow. BullMQ and Redis carry background work and live stream updates, while Postgres stores application and workflow state.
 
-The main offload path now runs through a Supervisor Agent. The supervisor owns a frontend engineering workflow that searches the project, prepares a user-facing plan, waits for human approval, and then delegates precise file changes to an editing workflow.
+### Request flows
+
+```text
+User message
+    |
+    v
+Intent routing
+    |------------------------------|
+    v                              v
+Instant conversation          Project change
+    |                              |
+Text streamed over SSE       Search → plan → approval
+                                   |
+                              Edit → verify → preview update
+```
+
+The conversation agent can answer about Anvil, inspect the current project, look up relevant public information, and inspect the rendered preview when needed. Its user-facing stream contains the assistant response rather than internal reasoning or tool details.
+
+The project-change path runs through a Supervisor Agent. It searches the project, prepares a readable plan, pauses for human approval, and then delegates the approved work to editing and verification stages. Progress, approval requests, completion, and failures are available through the same conversation stream, and completed stream chunks can be replayed by the UI.
 
 Preview work is executed on a configured SSH host. The backend manages project-specific remote workspaces, builds Docker previews, controls project containers, and performs project-scoped file operations through SSH/SFTP.
 
@@ -77,14 +95,16 @@ Preview work is executed on a configured SSH host. The backend manages project-s
 
 - Authenticated conversations: runs session-aware chat flows through `/core`.
 - Intent routing: classifies requests as instant responses or offloaded project work.
-- Streaming responses: publishes model and agent output over Redis-backed SSE channels.
+- Streaming responses: publishes request-scoped conversation text and agent progress over Redis-backed SSE channels.
+- Stream-aware testing UI: displays composed assistant replies, live progress, approval requests, completion state, and raw event data.
 - Project workspaces: creates isolated project records and remote workspace folders for generated previews.
 - React preview generation: creates and updates Vite React preview projects.
-- Supervisor workflow: coordinates search, planning, approval, editing, verification, and upload.
+- Supervisor workflow: coordinates search, planning, approval, editing, verification, and preview updates.
 - Human-in-the-loop approval: pauses before applying proposed changes and resumes after accept or deny.
-- Precise editing workflow: downloads target files locally, creates remote backups, applies line-range edits, verifies changes, and replaces remote files after hash checks.
+- Safe project editing: applies targeted or complete file changes, verifies the result, and updates the remote workspace.
+- Context-aware conversation tools: support project search, public web research, page content lookup, and preview inspection.
 - SSH project tools: support project-scoped file download, upload, backup, delete, create, verify, and bounded reads.
-- Streaming helpers: normalize workflow, tool, approval, debug, and status events for the testing UI.
+- Streaming helpers: normalize workflow, approval, status, error, and response events for the testing UI.
 - Preview lifecycle control: starts, stops, tracks, and updates project preview containers.
 
 ## Future plans
