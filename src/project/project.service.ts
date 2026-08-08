@@ -33,7 +33,7 @@ export class ProjectService {
   async findAll(userId: string) {
     return await this.db
       .selectFrom('preview_platform.project')
-      .select(['id', 'active_port', 'name', 'status'])
+      .select(['id', 'active_port', 'name', 'status', 'preview_url'])
       .where('user_id', '=', userId)
       .orderBy('created_at', 'desc')
       .execute();
@@ -42,7 +42,7 @@ export class ProjectService {
   async findById(userId: string, projectId: string) {
     return await this.db
       .selectFrom('preview_platform.project')
-      .select(['id', 'active_port', 'name', 'status'])
+      .select(['id', 'active_port', 'name', 'status', 'preview_url'])
       .where('user_id', '=', userId)
       .where('id', '=', projectId)
       .executeTakeFirstOrThrow();
@@ -58,12 +58,13 @@ export class ProjectService {
     return project?.preview_url ?? null;
   }
 
-  async insert(name: string, userId: string) {
+  async insert(description: string, userId: string) {
     const port = await this.portService.acquirePort();
     const { id: projectId } = await this.db
       .insertInto('preview_platform.project')
       .values({
-        name,
+        name: 'anvil-project-pending',
+        description,
         user_id: userId,
         template: 'react',
         active_port: port,
@@ -90,6 +91,15 @@ export class ProjectService {
       this.logger.error('Error retrieving conversation id');
       throw new Error('Error retrieving conversation id');
     }
+
+    await this.db
+      .insertInto('preview_platform.message')
+      .values({
+        message: description,
+        role: 'user',
+        conversation_id: conversationId,
+      })
+      .execute();
 
     await this.codeGenService.enqueueJob(projectId, port, conversationId);
 

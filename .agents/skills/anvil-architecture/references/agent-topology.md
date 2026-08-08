@@ -61,7 +61,9 @@ Supervisor agent
 └── frontendEngineeringWorkflow
     ├── search step
     │   └── Anvil Search Agent
-    │       └── search tools → SSH/workspace services
+    │       ├── read history
+    │       ├── bounded repository search calls → SSH/workspace services
+    │       └── tool-free Anvil Search Finalizer → legacy normalized handoff
     ├── plan step
     │   └── Anvil Planning Agent
     └── edit step
@@ -86,8 +88,18 @@ the processor uses the result only to select the next queue path.
 
 The runtime roles are split across search, planning, editing, and verification agents. The supervisor owns top-level request orchestration; the frontend-engineering workflow owns the durable sequence and its step transitions. Editing tools may invoke the nested edit workflow, whose verification path uses local edit/read tools and the verify agent.
 
+The search agent can use backend-bundled filesystem skills from `mastra-skills/`. These are concise, discoverable guidance playbooks for search sequencing, frontend structure, architecture history, CSS/TSX analysis, and structural edit planning. Skills are supplemental model guidance: request validation, sensitive-file rules, output schemas, dependency checks, and workflow behavior remain enforced by application code. Normal search is the production mode and permits bounded multi-search evidence collection; greedy is an explicit diagnostic mode that disables skills and permits one repository search call.
+
+Search execution and structural planning are split into two model phases that share the same configured search model. The first phase is the tool-capable search agent: it reads `architecture/HISTORY.md` once, validates each chosen repository search request, and collects bounded evidence. The second phase is a tool-free finalizer agent that receives the user request plus all validated search evidence and returns only the compact structural edit plan (`files_that_require_change` and `structure_plan`). Application code then normalizes that compact result back into the legacy internal search handoff shape consumed by approval, compression, editing, and streaming logic. Normal mode allows up to 10 searches; greedy diagnostic mode allows one.
+
+Agent runtime settings, including model identifiers and retry/error-processor policies, are centralized in `src/mastra/anvil-agent.config.ts`. Agent-specific instructions, tools, memory, and hooks remain with their agent factories.
+
+The editing agent receives approved file metadata and edit instructions only. Runtime state such as the structural plan, verification flags, hashes, backups, local staging paths, errors, and commit status is excluded from the model-facing contract. The supervisor and edit workflows reconstruct and own that state.
+
 All runtime agents, tools, workflows, and scorers must be reachable from centralized Mastra registration in `src/mastra/index.ts`. Tool exposure can be transitive through registered agent factories, and workflow-local scorers can be instantiated inside reachable workflows; they do not need separate top-level Mastra properties.
 
 Approval checkpoints and `RequestContext` data cross the workflow boundary. Approval state is persisted so a suspended workflow can resume with the same workflow/run context. These boundaries should remain explicit when changing the runtime graph.
+
+The approved structural plan is application-owned during editing. The supervisor stores it in the edit `RequestContext` and sends the editing agent a reduced file-instruction payload without runtime fields or repeated structural metadata. `run_edit_workflow` reconstructs the internal `FILE_EDIT[]` using that canonical plan; any legacy model-supplied `structure_plan` is ignored and reported only through sanitized diagnostics.
 
 Known gaps and inconsistencies in the current runtime graph should be recorded here as current-state observations rather than silently treated as intended design.

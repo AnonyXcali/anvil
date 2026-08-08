@@ -57,55 +57,47 @@ export class CodeGenService {
     const jobId = job.id + ':' + 'scaffold-project';
 
     await this.jobService.insert(jobId, conversationId, 'scaffold-project');
+
+    return String(job.id);
   }
 
-  async enqueue(message: string, projectName: string) {
-    //acquire port
+  async enqueue(description: string, userId: string) {
     const port = await this.portService.acquirePort();
 
-    //call db service here to create a project
-    const db = await this.dbService.query<{ id: string }>(
-      `
-        INSERT INTO preview_platform.project(name, status, active_port)
-        VALUES ($1, 'active', $2)
-        RETURNING id;
-    `,
-      [projectName, port],
-    );
+    const { id: projectId } = await this.db
+      .insertInto('preview_platform.project')
+      .values({
+        name: 'anvil-project-pending',
+        description,
+        user_id: userId,
+        template: 'react',
+        active_port: port,
+        status: 'processing',
+      })
+      .returning('id')
+      .executeTakeFirstOrThrow();
 
-    //DB: build row create
-    // const buildRow = await this.dbService.query<{ id: string }>(
-    //   `
-    //   INSERT INTO preview_platform.project_build(project_id, status, host_port, started_at)
-    //   VALUES ($1, $2, $3, $4)
-    //   RETURNING id;
-    // `,
-    //   [db.rows[0].id, 'queued', port, new Date()],
-    // );
+    const { id: conversationId } = await this.db
+      .insertInto('preview_platform.conversation')
+      .values({ user_id: userId, project_id: projectId })
+      .returning('id')
+      .executeTakeFirstOrThrow();
 
-    //add to the queue
-    const job = await this.queue.add(
-      'run-code',
-      {
-        conversationId: '',
-        projectId: db.rows[0].id,
-        port,
-      },
-      {
-        attempts: 1,
-        removeOnComplete: {
-          age: 60 * 60,
-          count: 100,
-        },
-        removeOnFail: {
-          age: 24 * 60 * 60,
-          count: 100,
-        },
-      },
-    );
+    await this.db
+      .insertInto('preview_platform.message')
+      .values({
+        message: description,
+        role: 'user',
+        conversation_id: conversationId,
+      })
+      .execute();
+
+    const jobId = await this.enqueueJob(projectId, port, conversationId);
 
     return {
-      jobId: job.id,
+      jobId,
+      projectId,
+      conversationId,
       status: 'queued',
     };
   }

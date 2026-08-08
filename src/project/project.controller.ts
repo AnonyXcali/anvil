@@ -32,10 +32,10 @@ export class ProjectController {
 
   @Post()
   async createProject(
-    @Body() body: { name: string },
+    @Body() body: { description: string },
     @Session() session: UserSession,
   ) {
-    return await this.projectService.insert(body.name, session.user.id);
+    return await this.projectService.insert(body.description, session.user.id);
   }
 
   @Delete('/:projectId')

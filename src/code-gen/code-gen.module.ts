@@ -10,6 +10,7 @@ import { PortModule } from '../ssh/port.module';
 import { CodeGenEditProcessor } from './code-gen-edit.processor';
 import { ChannelsModule } from 'src/channels/channels.module';
 import { JobModule } from 'src/job/job.module';
+import { CoreModule } from 'src/core/core.module';
 
 /**
  * POST /projects/:projectId/messages
@@ -37,6 +38,7 @@ import { JobModule } from 'src/job/job.module';
     DbModule,
     ChannelsModule,
     JobModule,
+    CoreModule,
     BullModule.registerQueue({
       name: 'code-execution',
     }),

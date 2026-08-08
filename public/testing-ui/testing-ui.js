@@ -86,21 +86,6 @@
     requestLog?.prepend(row);
   }
 
-  function extractPreviewUrl(value) {
-    if (typeof value !== 'string') return null;
-    const match = value.match(/\bhttps?:\/\/[^\s<>"')]+/i);
-    if (!match) return null;
-
-    try {
-      const url = new URL(match[0]);
-      return url.protocol === 'http:' || url.protocol === 'https:'
-        ? url.href
-        : null;
-    } catch {
-      return null;
-    }
-  }
-
   function makeMessageId() {
     if (crypto.randomUUID) return crypto.randomUUID();
     return `message-${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -116,15 +101,15 @@
         status: 'running',
         timeline: [],
         activity: null,
-        previewUrl: null,
         approvalMessage: null,
+        workflowErrorShown: false,
       };
       state.composers.set(messageId, composer);
       const card = document.createElement('article');
       card.className = 'chat-card chat-assistant';
       card.dataset.messageId = messageId;
       card.hidden = true;
-      card.innerHTML = `<div class="chat-meta">assistant · ${escapeHtml(messageId.slice(0, 8))}</div><div class="chat-content"></div><div class="chat-activity" hidden></div><div class="chat-actions" hidden></div>`;
+      card.innerHTML = `<div class="chat-meta">assistant · ${escapeHtml(messageId.slice(0, 8))}</div><div class="chat-content"></div><div class="chat-activity" hidden></div>`;
       transcript?.append(card);
     }
     if (streamId) composer.streamId = streamId;
@@ -157,11 +142,9 @@
     if (!card) return;
     const content = card.querySelector('.chat-content');
     const activity = card.querySelector('.chat-activity');
-    const actions = card.querySelector('.chat-actions');
     const visibleText = composer.text || composer.approvalMessage || '';
     const hasActivity = Boolean(composer.activity?.active);
-    const hasActions = Boolean(composer.previewUrl);
-    card.hidden = !visibleText && !hasActivity && !hasActions;
+    card.hidden = !visibleText && !hasActivity;
     if (content) content.textContent = visibleText;
     if (activity) {
       const currentActivity = composer.activity;
@@ -173,15 +156,6 @@
         activity.hidden = true;
         activity.textContent = '';
         delete activity.dataset.kind;
-      }
-    }
-    if (actions) {
-      if (composer.previewUrl) {
-        actions.hidden = false;
-        actions.innerHTML = `<a class="button button-quiet preview-link" href="${escapeHtml(composer.previewUrl)}" target="_blank" rel="noopener noreferrer">Open preview</a>`;
-      } else {
-        actions.hidden = true;
-        actions.textContent = '';
       }
     }
     card.dataset.status = composer.status;
@@ -213,6 +187,10 @@
       edit_status: { kind: 'editing', label: 'Editing project files...' },
       tool_status: { kind: 'tool', label: 'Using a tool...' },
       verification_status: { kind: 'verifying', label: 'Verifying changes...' },
+      task_preparation: {
+        kind: 'thinking',
+        label: 'Preparing summary of task...',
+      },
     };
     const fallback = fallbackLabels[type];
 
@@ -244,6 +222,7 @@
     if (timeline.querySelector('.empty-state')) timeline.innerHTML = '';
     const row = document.createElement('div');
     row.className = 'timeline-row';
+    row.dataset.eventType = type;
     row.innerHTML = `<strong>${escapeHtml(type)}</strong><span>${escapeHtml(message)}</span>`;
     timeline.prepend(row);
     while (timeline.children.length > 200) timeline.lastElementChild?.remove();
@@ -367,12 +346,30 @@
     const payload = event.payload || event.data || {};
     const message =
       payload.message || payload.text || payload.result || event.message || '';
+    if (
+      composer.workflowErrorShown &&
+      (type === 'workflow_error' || type === 'error')
+    )
+      return;
+    if (type === 'workflow_error') {
+      composer.workflowErrorShown = true;
+      composer.activity = null;
+      composer.status = 'error';
+      timeline
+        ?.querySelectorAll(
+          `[data-message-id="${CSS.escape(composer.messageId)}"] .timeline-row[data-event-type="error"]`,
+        )
+        .forEach((row) => row.remove());
+    }
     if (type === 'text-delta' || type === 'text')
       composer.text += typeof message === 'string' ? message : '';
-    const previewUrl = extractPreviewUrl(message);
-    if (previewUrl) composer.previewUrl = previewUrl;
+    if (type === 'task_preparation' && typeof message === 'string' && message) {
+      if (!composer.text) composer.text = message;
+      composer.activity = null;
+    }
     const nextActivity = activityForEvent(type, payload);
-    if (nextActivity !== undefined) composer.activity = nextActivity;
+    if (type !== 'task_preparation' && nextActivity !== undefined)
+      composer.activity = nextActivity;
     const completionMessage = completionMessageForEvent(type, payload, message);
     if (completionMessage && !composer.text) {
       composer.text = completionMessage;
@@ -384,22 +381,32 @@
       type === 'edit_status' ||
       type === 'tool_status' ||
       type === 'verification_status' ||
+      type === 'task_preparation' ||
       type === 'approval_required' ||
       type === 'completed' ||
       type === 'error' ||
+      type === 'workflow_error' ||
       type === 'legacy-text'
     ) {
       renderTimeline(
         composer,
         type,
         message ||
-          (type === 'completed' ? 'Workflow completed.' : 'Event received.'),
+          (type === 'completed'
+            ? 'Workflow completed.'
+            : type === 'workflow_error'
+              ? 'Something went wrong.'
+              : 'Event received.'),
       );
     }
     if (type === 'approval_required') showApproval(composer, payload);
     if (type === 'completed' || type === 'workflow-resume-completed')
       composer.status = 'completed';
-    if (type === 'error' || type === 'workflow-resume-cancelled')
+    if (
+      type === 'error' ||
+      type === 'workflow_error' ||
+      type === 'workflow-resume-cancelled'
+    )
       composer.status = 'error';
     renderComposer(composer);
   }
@@ -491,26 +498,6 @@
       }
     });
   });
-  document
-    .querySelector('[data-project-rename]')
-    ?.addEventListener('submit', async (event) => {
-      event.preventDefault();
-      const form = event.currentTarget;
-      try {
-        const response = await fetch(form.action, {
-          method: 'PATCH',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({
-            name: form.querySelector('[name="name"]').value,
-          }),
-        });
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        log('project renamed');
-        window.location.reload();
-      } catch (error) {
-        log('project rename failed', error.message);
-      }
-    });
   document
     .querySelector('[data-project-delete]')
     ?.addEventListener('click', async (event) => {

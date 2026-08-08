@@ -1,6 +1,7 @@
 import { Mastra } from '@mastra/core/mastra';
 import { PinoLogger } from '@mastra/loggers';
 import { LibSQLStore } from '@mastra/libsql';
+import { MemoryPG, WorkflowsPG } from '@mastra/pg';
 import { DuckDBStore } from '@mastra/duckdb';
 import { MastraCompositeStore } from '@mastra/core/storage';
 import {
@@ -11,45 +12,86 @@ import {
 } from '@mastra/observability';
 import { weatherWorkflow } from './workflows/weather-workflow';
 import { weatherAgent } from './agents/weather-agent';
-import { createAnvilAgent } from './agents/anvil-system-agent';
+import {
+  createAnvilAgent,
+  createAnvilSearchFinalizerAgent,
+} from './agents/anvil-system-agent';
 import { AGENT_DIRECTORY } from 'src/agent.directory';
 import { AnvilAgentSearchService } from 'src/anvil-agent/anvil-agent-search.service';
 import { createAnvilSupervisorAgent } from './agents/anvil-supervisor-agent';
 import { anvilPlanningAgent } from './agents/anvil-planning-agent';
 import { createFrontendEngineeringWorkflow } from 'src/anvil-agent-supervisor/anvil-agent-supervisor.workflow';
-import { createEditWorkflow } from 'src/anvil-agent-edit/anvil-agent-edit.workflow';
+import {
+  createEditWorkflow,
+  createStagedEditWorkflow,
+} from 'src/anvil-agent-edit/anvil-agent-edit.workflow';
 import { AnvilAgentEditService } from 'src/anvil-agent-edit/anvil-agent-edit.service';
+import { AnvilEditStagingService } from 'src/anvil-agent-edit/anvil-edit-staging.service';
 import { AnvilHistoryService } from 'src/anvil-history/anvil-history.service';
 import { createAnvilEditingAgent } from './agents/anvil-editing-agent';
 import { createAnvilVerifyAgent } from './agents/anvil-verify-agent';
 import { createAnvilConversationAgent } from './agents/anvil-convo-agent';
 import { createAnvilIntentAgent } from './agents/anvil-intent-agent';
+import { createAnvilProjectNameAgent } from './agents/anvil-project-name-agent';
 import type { AppEnv } from 'src/config/env.validation';
+import { Logger } from '@nestjs/common';
 
 export async function createMastra(dep: {
   anvilAgentSearchService: AnvilAgentSearchService;
   anvilAgentEditService: AnvilAgentEditService;
+  anvilEditStagingService: AnvilEditStagingService;
   anvilHistoryService: AnvilHistoryService;
   env: Pick<
     AppEnv,
-    'EXA_KEY' | 'FIRECRAWL_KEY' | 'LIGHTPANDA_KEY' | 'LIGHTPANDA_ENDPOINT'
+    | 'EXA_KEY'
+    | 'FIRECRAWL_KEY'
+    | 'LIGHTPANDA_KEY'
+    | 'LIGHTPANDA_ENDPOINT'
+    | 'MASTRA_DATABASE_URL'
   >;
-  conversationModel: string;
 }): Promise<Mastra> {
+  const storageLogger = new Logger('MastraStorage');
+  const workflowsStorage = new WorkflowsPG({
+    connectionString: dep.env.MASTRA_DATABASE_URL,
+    schemaName: 'mastra',
+  });
+  const memoryStorage = new MemoryPG({
+    connectionString: dep.env.MASTRA_DATABASE_URL,
+    schemaName: 'mastra',
+  });
+
+  await workflowsStorage.init();
+  await memoryStorage.init();
+  storageLogger.log(
+    'Mastra workflow and memory storage initialized: PostgreSQL schema "mastra"',
+  );
+
   const frontendEngineeringWorkflow = createFrontendEngineeringWorkflow();
   const editWorkflow = createEditWorkflow({
     anvilAgentEditService: dep.anvilAgentEditService,
+    anvilEditStagingService: dep.anvilEditStagingService,
+    anvilHistoryService: dep.anvilHistoryService,
+  });
+  const stagedEditWorkflow = createStagedEditWorkflow({
+    anvilAgentEditService: dep.anvilAgentEditService,
+    anvilEditStagingService: dep.anvilEditStagingService,
     anvilHistoryService: dep.anvilHistoryService,
   });
 
   return new Mastra({
-    workflows: { weatherWorkflow, frontendEngineeringWorkflow, editWorkflow },
+    workflows: {
+      weatherWorkflow,
+      frontendEngineeringWorkflow,
+      editWorkflow,
+      stagedEditWorkflow,
+    },
     agents: {
       weatherAgent,
-      [AGENT_DIRECTORY.anvilIntentAgent]: createAnvilIntentAgent({
-        model: dep.conversationModel,
-      }),
+      [AGENT_DIRECTORY.anvilIntentAgent]: createAnvilIntentAgent(),
+      [AGENT_DIRECTORY.anvilProjectNameAgent]: createAnvilProjectNameAgent(),
       [AGENT_DIRECTORY.anvilSearchAgent]: createAnvilAgent(dep),
+      [AGENT_DIRECTORY.anvilSearchFinalizerAgent]:
+        createAnvilSearchFinalizerAgent(),
       [AGENT_DIRECTORY.anvilSupervisorAgent]: createAnvilSupervisorAgent({
         frontendEngineeringWorkflow,
       }),
@@ -58,6 +100,7 @@ export async function createMastra(dep: {
         anvilAgentEditService: dep.anvilAgentEditService,
         anvilHistoryService: dep.anvilHistoryService,
         editWorkflow,
+        stagedEditWorkflow,
       }),
       [AGENT_DIRECTORY.anvilVerifyAgent]: createAnvilVerifyAgent({
         anvilAgentEditService: dep.anvilAgentEditService,
@@ -66,7 +109,6 @@ export async function createMastra(dep: {
       [AGENT_DIRECTORY.anvilConversationAgent]: createAnvilConversationAgent({
         anvilAgentSearchService: dep.anvilAgentSearchService,
         env: dep.env,
-        model: dep.conversationModel,
       }),
     },
     storage: new MastraCompositeStore({
@@ -76,6 +118,8 @@ export async function createMastra(dep: {
         url: 'file:./mastra.db',
       }),
       domains: {
+        memory: memoryStorage,
+        workflows: workflowsStorage,
         observability: await new DuckDBStore().getStore('observability'),
       },
     }),

@@ -49,6 +49,18 @@ export class SshService {
     }
   }
 
+  private validateSinglePathSegment(value: string, label: string): void {
+    if (
+      !value.trim() ||
+      value === '.' ||
+      value === '..' ||
+      value.includes('/') ||
+      value.includes('\\')
+    ) {
+      throw new Error(`${label} must be a single path segment`);
+    }
+  }
+
   private normalizeProjectRelativePath(
     projectRelativePath: string,
     label: string,
@@ -762,6 +774,255 @@ EOF`,
     }
   }
 
+  async getProjectFileState(
+    projectId: string,
+    filePath: string,
+  ): Promise<{ exists: boolean; hash: string | null }> {
+    this.validateProjectId(projectId);
+    const normalizedFilePath = this.normalizeProjectRelativePath(
+      filePath,
+      'File path',
+    );
+    const sshNode = new NodeSSH();
+    const remoteWorkspaceDir = this.getProjectWorkspaceDir(projectId);
+
+    try {
+      await sshNode.connect({
+        host: process.env.SSH_HOST!,
+        port: Number(process.env.SSH_PORT ?? 22),
+        username: process.env.SSH_USERNAME!,
+        privateKey: readFileSync(process.env.SSH_PRIVATE_KEY_PATH!, 'utf8'),
+      });
+
+      const result = await this.runStep(
+        sshNode,
+        'inspect-project-file-state',
+        [
+          `cd ${this.shellQuote(remoteWorkspaceDir)}`,
+          `if test -L ${this.shellQuote(normalizedFilePath)}; then exit 2; elif test -f ${this.shellQuote(normalizedFilePath)}; then sha256sum ${this.shellQuote(normalizedFilePath)} | awk '{print $1}'; else printf '%s' '__MISSING__'; fi`,
+        ].join(' && '),
+        {},
+      );
+      const hash = result.stdout.trim().toLowerCase();
+      return hash === '__missing__'
+        ? { exists: false, hash: null }
+        : { exists: true, hash };
+    } finally {
+      sshNode.dispose();
+    }
+  }
+
+  async createCommitBackup(
+    projectId: string,
+    filePath: string,
+    editRunId: string,
+  ): Promise<string> {
+    this.validateProjectId(projectId);
+    this.validateSinglePathSegment(editRunId, 'Edit run ID');
+    const normalizedFilePath = this.normalizeProjectRelativePath(
+      filePath,
+      'File path',
+    );
+    const backupFilePath = posix.join(
+      '.anvil-backups',
+      editRunId,
+      normalizedFilePath,
+    );
+    const sshNode = new NodeSSH();
+    const remoteWorkspaceDir = this.getProjectWorkspaceDir(projectId);
+
+    try {
+      await sshNode.connect({
+        host: process.env.SSH_HOST!,
+        port: Number(process.env.SSH_PORT ?? 22),
+        username: process.env.SSH_USERNAME!,
+        privateKey: readFileSync(process.env.SSH_PRIVATE_KEY_PATH!, 'utf8'),
+      });
+      await this.runStep(
+        sshNode,
+        'create-commit-backup',
+        [
+          `cd ${this.shellQuote(remoteWorkspaceDir)}`,
+          `test -f ${this.shellQuote(normalizedFilePath)}`,
+          `test ! -L ${this.shellQuote(normalizedFilePath)}`,
+          `test ! -L ${this.shellQuote('.anvil-backups')}`,
+          `mkdir -p -- ${this.shellQuote(posix.join('.anvil-backups', editRunId, posix.dirname(normalizedFilePath)))}`,
+          `test ! -L ${this.shellQuote(posix.join('.anvil-backups', editRunId))}`,
+          `cp -- ${this.shellQuote(normalizedFilePath)} ${this.shellQuote(backupFilePath)}`,
+          `test -f ${this.shellQuote(backupFilePath)}`,
+          `test ! -L ${this.shellQuote(backupFilePath)}`,
+        ].join(' && '),
+        {},
+      );
+      return backupFilePath;
+    } finally {
+      sshNode.dispose();
+    }
+  }
+
+  async removeCommitBackup(
+    projectId: string,
+    backupPath: string,
+    editRunId: string,
+  ): Promise<void> {
+    this.validateProjectId(projectId);
+    this.validateSinglePathSegment(editRunId, 'Edit run ID');
+    const normalizedBackupPath = this.normalizeProjectRelativePath(
+      backupPath,
+      'Backup file path',
+    );
+    const expectedPrefix = posix.join('.anvil-backups', editRunId) + '/';
+    if (!normalizedBackupPath.startsWith(expectedPrefix)) {
+      throw new Error('Backup path does not belong to the edit run');
+    }
+    const sshNode = new NodeSSH();
+    const remoteWorkspaceDir = this.getProjectWorkspaceDir(projectId);
+
+    try {
+      await sshNode.connect({
+        host: process.env.SSH_HOST!,
+        port: Number(process.env.SSH_PORT ?? 22),
+        username: process.env.SSH_USERNAME!,
+        privateKey: readFileSync(process.env.SSH_PRIVATE_KEY_PATH!, 'utf8'),
+      });
+      await this.runStep(
+        sshNode,
+        'remove-commit-backup',
+        [
+          `cd ${this.shellQuote(remoteWorkspaceDir)}`,
+          `test ! -L ${this.shellQuote(normalizedBackupPath)}`,
+          `rm -f -- ${this.shellQuote(normalizedBackupPath)}`,
+        ].join(' && '),
+        {},
+      );
+    } finally {
+      sshNode.dispose();
+    }
+  }
+
+  async removeCreatedProjectFile(
+    projectId: string,
+    filePath: string,
+  ): Promise<string> {
+    this.validateProjectId(projectId);
+    const normalizedFilePath = this.normalizeProjectRelativePath(
+      filePath,
+      'File path',
+    );
+    const sshNode = new NodeSSH();
+    const remoteWorkspaceDir = this.getProjectWorkspaceDir(projectId);
+    const remoteFilePath = posix.join(remoteWorkspaceDir, normalizedFilePath);
+
+    try {
+      await sshNode.connect({
+        host: process.env.SSH_HOST!,
+        port: Number(process.env.SSH_PORT ?? 22),
+        username: process.env.SSH_USERNAME!,
+        privateKey: readFileSync(process.env.SSH_PRIVATE_KEY_PATH!, 'utf8'),
+      });
+      await this.runStep(
+        sshNode,
+        'remove-created-project-file',
+        [
+          `cd ${this.shellQuote(remoteWorkspaceDir)}`,
+          `test -f ${this.shellQuote(normalizedFilePath)}`,
+          `test ! -L ${this.shellQuote(normalizedFilePath)}`,
+          `rm -- ${this.shellQuote(normalizedFilePath)}`,
+          `test ! -e ${this.shellQuote(normalizedFilePath)}`,
+        ].join(' && '),
+        {},
+      );
+      return remoteFilePath;
+    } finally {
+      sshNode.dispose();
+    }
+  }
+
+  async removeEmptyCreatedDirectory(
+    projectId: string,
+    folderPath: string,
+  ): Promise<string> {
+    this.validateProjectId(projectId);
+    const normalizedFolderPath = this.normalizeProjectRelativePath(
+      folderPath,
+      'Folder path',
+    );
+    const sshNode = new NodeSSH();
+    const remoteWorkspaceDir = this.getProjectWorkspaceDir(projectId);
+    const remoteFolderPath = posix.join(
+      remoteWorkspaceDir,
+      normalizedFolderPath,
+    );
+
+    try {
+      await sshNode.connect({
+        host: process.env.SSH_HOST!,
+        port: Number(process.env.SSH_PORT ?? 22),
+        username: process.env.SSH_USERNAME!,
+        privateKey: readFileSync(process.env.SSH_PRIVATE_KEY_PATH!, 'utf8'),
+      });
+      await this.runStep(
+        sshNode,
+        'remove-empty-created-directory',
+        [
+          `cd ${this.shellQuote(remoteWorkspaceDir)}`,
+          `test -d ${this.shellQuote(normalizedFolderPath)}`,
+          `test ! -L ${this.shellQuote(normalizedFolderPath)}`,
+          `test -z "$(find ${this.shellQuote(normalizedFolderPath)} -mindepth 1 -maxdepth 1 -print -quit)"`,
+          `rmdir -- ${this.shellQuote(normalizedFolderPath)}`,
+          `test ! -e ${this.shellQuote(normalizedFolderPath)}`,
+        ].join(' && '),
+        {},
+      );
+      return remoteFolderPath;
+    } finally {
+      sshNode.dispose();
+    }
+  }
+
+  async restoreProjectFile(
+    projectId: string,
+    backupFilePath: string,
+    originalFilePath: string,
+  ): Promise<string> {
+    this.validateProjectId(projectId);
+    const normalizedBackupPath = this.normalizeProjectRelativePath(
+      backupFilePath,
+      'Backup file path',
+    );
+    const normalizedOriginalPath = this.normalizeProjectRelativePath(
+      originalFilePath,
+      'Original file path',
+    );
+    const sshNode = new NodeSSH();
+    const remoteWorkspaceDir = this.getProjectWorkspaceDir(projectId);
+
+    try {
+      await sshNode.connect({
+        host: process.env.SSH_HOST!,
+        port: Number(process.env.SSH_PORT ?? 22),
+        username: process.env.SSH_USERNAME!,
+        privateKey: readFileSync(process.env.SSH_PRIVATE_KEY_PATH!, 'utf8'),
+      });
+      await this.runStep(
+        sshNode,
+        'restore-project-file',
+        [
+          `cd ${this.shellQuote(remoteWorkspaceDir)}`,
+          `test -f ${this.shellQuote(normalizedBackupPath)}`,
+          `test ! -L ${this.shellQuote(normalizedBackupPath)}`,
+          `test ! -L ${this.shellQuote(normalizedOriginalPath)}`,
+          `cp ${this.shellQuote(normalizedBackupPath)} ${this.shellQuote(normalizedOriginalPath)}`,
+          `test -f ${this.shellQuote(normalizedOriginalPath)}`,
+        ].join(' && '),
+        {},
+      );
+      return normalizedOriginalPath;
+    } finally {
+      sshNode.dispose();
+    }
+  }
+
   async uploadProjectFile(
     projectId: string,
     localFilePath: string,
@@ -887,15 +1148,24 @@ EOF`,
 
       await sshNode.putFile(realLocalPath, remoteFilePath);
 
-      await this.runStep(
+      const localFinalHash = createHash('sha256')
+        .update(await readFile(realLocalPath))
+        .digest('hex');
+      const uploadedHashResult = await this.runStep(
         sshNode,
         'verify-uploaded-project-file',
         [
           `cd ${shellQuote(remoteWorkspaceDir)}`,
           `test -f ${shellQuote(normalizedOriginalFilePath)}`,
+          `sha256sum ${shellQuote(normalizedOriginalFilePath)} | awk '{print $1}'`,
         ].join(' && '),
         {},
       );
+      if (uploadedHashResult.stdout.trim().toLowerCase() !== localFinalHash) {
+        throw new Error(
+          `Uploaded file hash does not match local staged content: ${normalizedOriginalFilePath}`,
+        );
+      }
 
       return remoteFilePath;
     } catch (e: unknown) {

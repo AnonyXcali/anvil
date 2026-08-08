@@ -22,6 +22,10 @@ export function createAnvilHistoryTools(historyService: AnvilHistoryService) {
         'Read the complete architecture/HISTORY.md file for the current project before searching or making changes.',
       outputSchema: z.string(),
       execute: async (_inputData: unknown, context: ToolExecutionContext) => {
+        if (context.requestContext?.get('historyRead') === true) {
+          return 'Architecture history was already read for this search run. Reuse the previous content.';
+        }
+
         try {
           const content = await historyService.readHistory(
             getProjectId(context),

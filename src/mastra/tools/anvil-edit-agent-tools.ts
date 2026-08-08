@@ -1,9 +1,19 @@
 import { createTool, ToolExecutionContext } from '@mastra/core/tools';
 import { z } from 'zod';
 import { AnvilAgentEditService } from 'src/anvil-agent-edit/anvil-agent-edit.service';
-import type { createEditWorkflow } from 'src/anvil-agent-edit/anvil-agent-edit.workflow';
-import { Z_EDIT_AGENT_WORKFLOW_INPUT } from 'src/anvil-agent-edit/anvil-agent-edit.types';
-import type { EditCleanupTarget } from 'src/anvil-agent/anvil-agent.types';
+import type {
+  createEditWorkflow,
+  createStagedEditWorkflow,
+} from 'src/anvil-agent-edit/anvil-agent-edit.workflow';
+import {
+  toInternalEditInput,
+  Z_MODEL_EDIT_AGENT_WORKFLOW_INPUT,
+  type STAGING_MANIFEST,
+} from 'src/anvil-agent-edit/anvil-agent-edit.types';
+import type {
+  EditCleanupTarget,
+  STRUCTURE_PLAN,
+} from 'src/anvil-agent/anvil-agent.types';
 import { AnvilHistoryService } from 'src/anvil-history/anvil-history.service';
 import {
   appendHistoryBestEffort,
@@ -42,8 +52,40 @@ function getProjectId(context: ToolExecutionContext): string {
   return projectId;
 }
 
+function getCanonicalStructurePlan(
+  context: ToolExecutionContext,
+): STRUCTURE_PLAN {
+  const structurePlan = context.requestContext?.get('structurePlan');
+  if (!isStructurePlan(structurePlan)) {
+    throw new Error(
+      'Canonical structural plan is unavailable for edit workflow',
+    );
+  }
+  return structurePlan;
+}
+
+function isStructurePlan(value: unknown): value is STRUCTURE_PLAN {
+  if (typeof value !== 'object' || value === null) return false;
+  const plan = value as Record<string, unknown>;
+  return (
+    typeof plan.feature_root === 'string' &&
+    Array.isArray(plan.phases) &&
+    Array.isArray(plan.directories_to_create) &&
+    Array.isArray(plan.preserve) &&
+    Array.isArray(plan.existing_paths)
+  );
+}
+
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : 'Unknown edit tool error';
+}
+
+function rejectMultiFileMutation(context: ToolExecutionContext): void {
+  if (context.requestContext?.get('multiFileHandoff') === true) {
+    throw new Error(
+      'Direct mutation tools are disabled for multi-file edits; use run_edit_workflow.',
+    );
+  }
 }
 
 function getWorkflowResultError(result: { status: string }): string {
@@ -76,6 +118,46 @@ async function cleanUpFailedEdit(
   context: ToolExecutionContext,
   anvilAgentEditService: AnvilAgentEditService,
 ): Promise<void> {
+  const manifest = context.requestContext?.get('stagingManifest');
+  if (
+    manifest &&
+    typeof manifest === 'object' &&
+    'stagingRoot' in manifest &&
+    typeof manifest.stagingRoot === 'string'
+  ) {
+    const stagingManifest = manifest as unknown as STAGING_MANIFEST;
+    let backupCleanupFailed = false;
+    if (context.requestContext?.get('preserveBackupsOnFailure') !== true) {
+      for (const file of stagingManifest.files ?? []) {
+        if (!file || typeof file !== 'object' || !('backupPath' in file)) {
+          continue;
+        }
+        const backupPath = (file as { backupPath?: unknown }).backupPath;
+        if (typeof backupPath !== 'string' || !backupPath) continue;
+        try {
+          await anvilAgentEditService.removeCommitBackup(
+            stagingManifest.projectId,
+            backupPath,
+            stagingManifest.editRunId,
+          );
+        } catch {
+          backupCleanupFailed = true;
+        }
+      }
+    }
+    if (backupCleanupFailed) {
+      context.requestContext?.set('preserveBackupsOnFailure', true);
+    }
+    try {
+      if (context.requestContext?.get('preserveBackupsOnFailure') !== true) {
+        await anvilAgentEditService.removeStagingWorkspace(
+          manifest.stagingRoot,
+        );
+      }
+    } catch {
+      // Staging cleanup is best-effort and must not replace the edit error.
+    }
+  }
   const targets = context.requestContext?.get('editCleanupTargets');
   if (!Array.isArray(targets)) {
     return;
@@ -87,7 +169,10 @@ async function cleanUpFailedEdit(
     }
 
     try {
-      if (target.backupFilePath) {
+      if (
+        target.backupFilePath &&
+        context.requestContext?.get('preserveBackupsOnFailure') !== true
+      ) {
         await anvilAgentEditService.cleanUp(
           target.projectId,
           target.backupFilePath,
@@ -106,8 +191,14 @@ export function createAnvilEditAgentTools(deps: {
   anvilAgentEditService: AnvilAgentEditService;
   anvilHistoryService: AnvilHistoryService;
   editWorkflow: ReturnType<typeof createEditWorkflow>;
+  stagedEditWorkflow: ReturnType<typeof createStagedEditWorkflow>;
 }) {
-  const { anvilAgentEditService, anvilHistoryService, editWorkflow } = deps;
+  const {
+    anvilAgentEditService,
+    anvilHistoryService,
+    editWorkflow,
+    stagedEditWorkflow,
+  } = deps;
 
   return {
     ...createAnvilHistoryTools(anvilHistoryService),
@@ -115,29 +206,33 @@ export function createAnvilEditAgentTools(deps: {
       id: 'run_edit_workflow',
       description:
         'Run the edit workflow once with workflow-ready FILE_EDIT[] input. Runtime workflow state is managed by application code, not by the model.',
-      inputSchema: z.object({
-        inputData: Z_EDIT_AGENT_WORKFLOW_INPUT,
-        stagedFiles: z
-          .array(
-            z.object({
-              projectFilePath: z.string().min(1),
-              localFilePath: z.string().optional(),
-              content: z.string(),
-            }),
-          )
-          .optional(),
-      }),
+      inputSchema: z
+        .object({
+          inputData: Z_MODEL_EDIT_AGENT_WORKFLOW_INPUT,
+        })
+        .strict(),
       outputSchema: Z_RUN_EDIT_WORKFLOW_OUTPUT,
       execute: async (inputData, context) => {
         try {
-          getProjectId(context);
-
-          if (inputData.stagedFiles) {
-            context.requestContext?.set(
-              'cssStagedFiles',
-              inputData.stagedFiles,
-            );
+          if (inputData.inputData.length === 0) {
+            return {
+              success: false,
+              files: [],
+              error: 'At least one file edit is required',
+            };
           }
+
+          getProjectId(context);
+          const canonicalPlan = getCanonicalStructurePlan(context);
+          const internalInputData = toInternalEditInput(
+            inputData.inputData,
+            canonicalPlan,
+          );
+
+          context.requestContext?.set(
+            'coordinatedUpload',
+            inputData.inputData.length > 1,
+          );
 
           const hasRunEditWorkflow =
             context.requestContext?.get('hasRunEditWorkflow') === true;
@@ -152,10 +247,18 @@ export function createAnvilEditAgentTools(deps: {
 
           context.requestContext?.set('hasRunEditWorkflow', true);
 
-          const run = await editWorkflow.createRun();
+          const hasCreateOperation = inputData.inputData.some(
+            (file) => file.operation === 'create',
+          );
+          const useStagedWorkflow =
+            inputData.inputData.length > 1 || hasCreateOperation;
+
+          const run = await (
+            useStagedWorkflow ? stagedEditWorkflow : editWorkflow
+          ).createRun();
           const result = await run.start({
-            inputData: inputData.inputData,
-            initialState: inputData.inputData,
+            inputData: internalInputData,
+            initialState: internalInputData,
             requestContext: context.requestContext,
             outputWriter: async (chunk) => {
               await context.writer?.write(chunk);
@@ -195,6 +298,7 @@ export function createAnvilEditAgentTools(deps: {
       }),
       outputSchema: Z_MUTATION_TOOL_OUTPUT,
       execute: async (inputData, context) => {
+        rejectMultiFileMutation(context);
         const projectId = getProjectId(context);
         try {
           await anvilAgentEditService.createProjectFile(
@@ -232,6 +336,7 @@ export function createAnvilEditAgentTools(deps: {
       }),
       outputSchema: Z_MUTATION_TOOL_OUTPUT,
       execute: async (inputData, context) => {
+        rejectMultiFileMutation(context);
         const projectId = getProjectId(context);
         try {
           await anvilAgentEditService.createProjectFolder(
@@ -271,6 +376,7 @@ export function createAnvilEditAgentTools(deps: {
       }),
       outputSchema: Z_MUTATION_TOOL_OUTPUT,
       execute: async (inputData, context) => {
+        rejectMultiFileMutation(context);
         const projectId = getProjectId(context);
         try {
           await anvilAgentEditService.deleteProjectFile(
@@ -310,6 +416,7 @@ export function createAnvilEditAgentTools(deps: {
       }),
       outputSchema: Z_MUTATION_TOOL_OUTPUT,
       execute: async (inputData, context) => {
+        rejectMultiFileMutation(context);
         const projectId = getProjectId(context);
         try {
           await anvilAgentEditService.deleteProjectFolder(

@@ -1,7 +1,9 @@
 export type AppEnv = {
   PORT: number;
   OPENAI_API_KEY: string;
+  ANTHROPIC_API_KEY: string;
   OPENAI_MODEL: string;
+  MASTRA_DATABASE_URL: string;
   VAST_BASE_URL: string;
   VAST_AUTH_URL: string;
   VAST_MODEL: string;
@@ -69,7 +71,15 @@ export function validateEnv(config: Record<string, unknown>): AppEnv {
   return {
     PORT: parsePort(config.PORT, 'PORT', 3000),
     OPENAI_API_KEY: requireString(config.OPENAI_API_KEY, 'OPENAI_API_KEY'),
+    ANTHROPIC_API_KEY: requireString(
+      config.ANTHROPIC_API_KEY,
+      'ANTHROPIC_API_KEY',
+    ),
     OPENAI_MODEL: requireString(config.OPENAI_MODEL, 'OPENAI_MODEL'),
+    MASTRA_DATABASE_URL: requireString(
+      config.MASTRA_DATABASE_URL,
+      'MASTRA_DATABASE_URL',
+    ),
     VAST_BASE_URL: requireString(config.VAST_BASE_URL, 'VAST_BASE_URL'),
     VAST_AUTH_URL: requireString(config.VAST_AUTH_URL, 'VAST_AUTH_URL'),
     VAST_MODEL: requireString(config.VAST_MODEL, 'VAST_MODEL'),

@@ -5,6 +5,7 @@ import { AnvilAgentSearchModule } from 'src/anvil-agent/anvil-agent-search.modul
 import { AnvilAgentSearchService } from 'src/anvil-agent/anvil-agent-search.service';
 import { AnvilAgentEditModule } from 'src/anvil-agent-edit/anvil-agent-edit.module';
 import { AnvilAgentEditService } from 'src/anvil-agent-edit/anvil-agent-edit.service';
+import { AnvilEditStagingService } from 'src/anvil-agent-edit/anvil-edit-staging.service';
 import { AnvilHistoryModule } from 'src/anvil-history/anvil-history.module';
 import { AnvilHistoryService } from 'src/anvil-history/anvil-history.service';
 import { ConfigService } from '@nestjs/config';
@@ -23,6 +24,7 @@ import type { AppEnv } from 'src/config/env.validation';
       useFactory: async (
         anvilAgentSearchService: AnvilAgentSearchService,
         anvilAgentEditService: AnvilAgentEditService,
+        anvilEditStagingService: AnvilEditStagingService,
         anvilHistoryService: AnvilHistoryService,
         configService: ConfigService<AppEnv, true>,
       ): Promise<MastraModuleOptions> => ({
@@ -30,8 +32,12 @@ import type { AppEnv } from 'src/config/env.validation';
         mastra: await createMastra({
           anvilAgentSearchService,
           anvilAgentEditService,
+          anvilEditStagingService,
           anvilHistoryService,
           env: {
+            MASTRA_DATABASE_URL: configService.get('MASTRA_DATABASE_URL', {
+              infer: true,
+            }),
             EXA_KEY: configService.get('EXA_KEY', { infer: true }),
             FIRECRAWL_KEY: configService.get('FIRECRAWL_KEY', { infer: true }),
             LIGHTPANDA_KEY: configService.get('LIGHTPANDA_KEY', {
@@ -41,17 +47,12 @@ import type { AppEnv } from 'src/config/env.validation';
               infer: true,
             }),
           },
-          conversationModel: `openai/${configService.getOrThrow(
-            'OPENAI_MODEL',
-            {
-              infer: true,
-            },
-          )}`,
         }),
       }),
       inject: [
         AnvilAgentSearchService,
         AnvilAgentEditService,
+        AnvilEditStagingService,
         AnvilHistoryService,
         ConfigService,
       ],

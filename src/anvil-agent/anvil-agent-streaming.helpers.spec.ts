@@ -1,6 +1,7 @@
 import {
   buildAppStreamEvent,
   buildStreamEnvelope,
+  sanitizeApprovalSummary,
 } from './anvil-agent-streaming.helpers';
 
 describe('stream event mapping', () => {
@@ -45,7 +46,7 @@ describe('stream event mapping', () => {
     });
   });
 
-  it('preserves failed workflow step results as failed status events', () => {
+  it('maps failed workflow step results to the unified workflow error event', () => {
     expect(
       buildAppStreamEvent({
         type: 'workflow-step-result',
@@ -55,10 +56,10 @@ describe('stream event mapping', () => {
         },
       }),
     ).toMatchObject({
-      type: 'edit_status',
+      type: 'workflow_error',
       payload: {
         status: 'failed',
-        message: 'The edit workflow failed.',
+        message: 'Something went wrong.',
       },
     });
   });
@@ -139,12 +140,54 @@ describe('stream event mapping', () => {
         type: 'workflow-finish',
         payload: { workflowStatus: 'failed' },
       }),
-    ).toMatchObject({ type: 'error', payload: { status: 'failed' } });
+    ).toMatchObject({
+      type: 'workflow_error',
+      payload: { status: 'failed', message: 'Something went wrong.' },
+    });
 
     expect(buildAppStreamEvent({ type: 'abort', payload: {} })).toMatchObject({
-      type: 'error',
+      type: 'workflow_error',
       payload: { status: 'failed' },
     });
+  });
+
+  it('maps failed workflow steps and workflow errors to workflow_error', () => {
+    expect(
+      buildAppStreamEvent({
+        type: 'workflow-step-result',
+        payload: {
+          id: 'anvil-agent-workflow-plan-step',
+          status: 'failed',
+        },
+      }),
+    ).toEqual({
+      type: 'workflow_error',
+      payload: {
+        status: 'failed',
+        message: 'Something went wrong.',
+        step: 'anvil-agent-workflow-plan-step',
+      },
+    });
+
+    expect(buildAppStreamEvent({ type: 'error', payload: {} })).toMatchObject({
+      type: 'workflow_error',
+      payload: { status: 'failed' },
+    });
+
+    expect(
+      buildAppStreamEvent({ type: 'tool-error', payload: {} }),
+    ).toMatchObject({ type: 'error', payload: { status: 'failed' } });
+  });
+
+  it('maps staged transaction steps to edit status events', () => {
+    expect(
+      buildAppStreamEvent({
+        type: 'workflow-step-start',
+        payload: {
+          id: 'anvil-edit-agent-staging-prepare-all-files-step',
+        },
+      }),
+    ).toMatchObject({ type: 'edit_status', payload: { status: 'started' } });
   });
 
   it('does not map suspended or unknown chunks to ordinary UI events', () => {
@@ -173,5 +216,16 @@ describe('stream event mapping', () => {
       jobId: 'job-1',
       raw,
     });
+  });
+
+  it('sanitizes approval summaries to business-facing copy', () => {
+    expect(
+      sanitizeApprovalSummary(
+        'Adds a responsive dashboard.\nFiles: src/app/App.tsx\npatch: --- a/src/app/App.css',
+      ),
+    ).toBe('Adds a responsive dashboard.');
+    expect(sanitizeApprovalSummary('src/app/App.tsx')).toBe(
+      'The requested application improvements are ready for review.',
+    );
   });
 });

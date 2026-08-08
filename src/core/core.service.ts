@@ -19,10 +19,12 @@ import { MastraService } from '@mastra/nestjs';
 import { StreamEventType } from 'src/anvil-agent/anvil-agent-chunk.dictionary';
 import {
   buildAppStreamEvent,
-  getWorkflowFinishStatus,
+  getApprovalSuspendPayload,
   getStreamChunkType,
 } from 'src/anvil-agent/anvil-agent-streaming.helpers';
 import { AnvilAgentStreamPublisher } from 'src/anvil-agent/anvil-agent-stream-publisher.service';
+import { AnvilAgentSupervisorService } from 'src/anvil-agent-supervisor/anvil-agent-supervisor.service';
+import { AGENT_DIRECTORY } from 'src/agent.directory';
 import type { Json } from 'src/db/db.types';
 
 /**
@@ -46,6 +48,7 @@ export class CoreService {
     private readonly channelService: ChannelsService,
     private readonly mastraService: MastraService,
     private readonly streamPublisher: AnvilAgentStreamPublisher,
+    private readonly anvilAgentSupervisorService: AnvilAgentSupervisorService,
   ) {}
 
   async handleFlowInitiation(query: string, userId: string, projectId: string) {
@@ -72,8 +75,25 @@ export class CoreService {
       })
       .execute();
 
-    //create a job to intent processor and queue it
-    //the job takes the query and the conversation_id futher.
+    const { streamId, jobId } = await this.enqueueIntentJob(
+      query,
+      conversationId,
+      projectId,
+    );
+
+    //return the conversation_id and job_id
+    return {
+      job_id: jobId,
+      conversation_id: conversationId,
+      stream_id: streamId,
+    };
+  }
+
+  async enqueueIntentJob(
+    query: string,
+    conversationId: string,
+    projectId: string,
+  ): Promise<{ jobId: string; streamId: string }> {
     this.logger.log('Queueing job.....');
     const streamId = randomUUID();
     const job = await this.intentQueue.add(
@@ -98,26 +118,19 @@ export class CoreService {
     );
 
     if (!job.id) {
-      throw new Error('Job id is null');
+      throw new Error('Job id is not received');
     }
-
-    //TODO: replace with job service insert method
 
     await this.db
       .insertInto('preview_platform.jobs')
       .values({
-        id: job.id + ':' + 'intent',
+        id: job.id + ':intent',
         conversation_id: conversationId,
         type: 'intent',
       })
       .execute();
 
-    //return the conversation_id and job_id
-    return {
-      job_id: job.id, //TODO: remove the job_id
-      conversation_id: conversationId,
-      stream_id: streamId,
-    };
+    return { jobId: String(job.id), streamId };
   }
 
   handleRelay(conversationId: string) {
@@ -173,6 +186,9 @@ export class CoreService {
         'preview_platform.workflow_run.conversation_id',
         'preview_platform.workflow_run.project_id',
         'preview_platform.workflow_run.status',
+        'preview_platform.workflow_run.resume_agent_id',
+        'preview_platform.workflow_run.resume_tool_call_id',
+        'preview_platform.workflow_run.resume_tool_name',
       ])
       .where('preview_platform.workflow_run.id', '=', approvalRequestId)
       .where('preview_platform.project.user_id', '=', userId)
@@ -189,12 +205,21 @@ export class CoreService {
       return { success: true };
     }
 
-    // TODO: Keep this guard aligned with the UI button-disable behavior to prevent duplicate resume calls.
     if (workflowRun.status !== 'suspended') {
       throw new ConflictException('Workflow run is not suspended');
     }
 
-    await this.updateWorkflowRunStatus(workflowRun.id, 'running');
+    const claimedRun = await this.db
+      .updateTable('preview_platform.workflow_run')
+      .set({ status: 'running' })
+      .where('id', '=', workflowRun.id)
+      .where('status', '=', 'suspended')
+      .returning('id')
+      .executeTakeFirst();
+
+    if (!claimedRun) {
+      throw new ConflictException('Workflow run is no longer suspended');
+    }
 
     void this.resumeWorkflowRunAndRelay({
       approvalRequestId: workflowRun.id,
@@ -202,6 +227,8 @@ export class CoreService {
       runId: workflowRun.run_id,
       conversationId: workflowRun.conversation_id,
       approved: decision === 'accept',
+      resumeAgentId: workflowRun.resume_agent_id,
+      resumeToolCallId: workflowRun.resume_tool_call_id,
     });
 
     return { success: true };
@@ -224,14 +251,19 @@ export class CoreService {
     runId,
     conversationId,
     approved,
+    resumeAgentId,
+    resumeToolCallId,
   }: {
     approvalRequestId: string;
     workflowId: string;
     runId: string;
     conversationId: string;
     approved: boolean;
+    resumeAgentId: string | null;
+    resumeToolCallId: string | null;
   }): Promise<void> {
     const streamId = `${approvalRequestId}:workflow-resume`;
+    let workflowErrorPublished = false;
 
     const publishChunk = async (chunk: unknown) => {
       await this.streamPublisher.publish({
@@ -250,7 +282,29 @@ export class CoreService {
         return;
       }
 
+      if (
+        appEvent.type === StreamEventType.WORKFLOW_ERROR &&
+        workflowErrorPublished
+      ) {
+        return;
+      }
+      if (appEvent.type === StreamEventType.WORKFLOW_ERROR) {
+        workflowErrorPublished = true;
+      }
+
       await publishChunk(appEvent);
+    };
+    const publishWorkflowError = async () => {
+      if (workflowErrorPublished) return;
+      workflowErrorPublished = true;
+      await publishChunk({
+        type: StreamEventType.WORKFLOW_ERROR,
+        payload: {
+          status: 'failed',
+          message: 'Something went wrong.',
+          step: 'workflow',
+        },
+      });
     };
 
     try {
@@ -263,16 +317,39 @@ export class CoreService {
         },
       });
 
-      const mastra = this.mastraService.getMastra();
-      const workflow = mastra.getWorkflowById(workflowId);
-      const run = await workflow.createRun({ runId });
-      const stream = run.resumeStream({
-        resumeData: { approved },
-      });
+      const stream =
+        resumeAgentId === AGENT_DIRECTORY.anvilSupervisorAgent
+          ? await this.anvilAgentSupervisorService.resumeSupervisorAgent({
+              runId,
+              approved,
+              toolCallId: resumeToolCallId,
+            })
+          : await this.resumeLegacyWorkflow({ workflowId, runId, approved });
 
       for await (const chunk of stream.fullStream) {
         await publishChunk(chunk);
         await publishAppEvent(chunk);
+
+        const approvalSuspendPayload = getApprovalSuspendPayload(chunk);
+        if (approvalSuspendPayload && resumeAgentId) {
+          await this.updateWorkflowRunSuspension(
+            approvalRequestId,
+            approvalSuspendPayload.raw as Json,
+            resumeAgentId,
+            approvalSuspendPayload.toolCallId,
+            approvalSuspendPayload.toolName,
+          );
+          await publishChunk({
+            type: StreamEventType.APPROVAL_REQUIRED,
+            payload: {
+              approvalId: approvalRequestId,
+              title: approvalSuspendPayload.title,
+              message: approvalSuspendPayload.message,
+              summary: approvalSuspendPayload.summary,
+            },
+          });
+          continue;
+        }
 
         switch (getStreamChunkType(chunk)) {
           case 'workflow-execution-suspended':
@@ -295,14 +372,6 @@ export class CoreService {
             );
             continue;
           case 'workflow-finish':
-            if (getWorkflowFinishStatus(chunk) === 'failed') {
-              await publishChunk({
-                type: StreamEventType.ERROR,
-                payload: {
-                  message: 'Something went wrong.',
-                },
-              });
-            }
             continue;
           default:
             this.logger.debug(
@@ -312,9 +381,14 @@ export class CoreService {
         }
       }
 
-      const result = await stream.result;
+      const result = 'result' in stream ? await stream.result : undefined;
 
-      if (result.status === 'suspended') {
+      if (workflowErrorPublished) {
+        await this.updateWorkflowRunStatus(approvalRequestId, 'failed');
+        return;
+      }
+
+      if (result?.status === 'suspended') {
         await this.updateWorkflowRunSuspension(
           approvalRequestId,
           await this.loadWorkflowSnapshot(workflowId, runId),
@@ -322,14 +396,9 @@ export class CoreService {
         return;
       }
 
-      if (result.status === 'failed') {
+      if (result?.status === 'failed') {
         await this.updateWorkflowRunStatus(approvalRequestId, 'failed');
-        await publishChunk({
-          type: StreamEventType.ERROR,
-          payload: {
-            message: 'Something went wrong.',
-          },
-        });
+        await publishWorkflowError();
         return;
       }
 
@@ -353,14 +422,35 @@ export class CoreService {
       });
     } catch (error) {
       await this.updateWorkflowRunStatus(approvalRequestId, 'failed');
-      await publishChunk({
-        type: StreamEventType.ERROR,
-        payload: {
-          message: 'Something went wrong.',
-        },
-      });
+      await publishWorkflowError();
       this.logger.error(error);
+      if (
+        error instanceof Error &&
+        error.message.includes('workflow run was not suspended')
+      ) {
+        this.logger.warn(
+          `Mastra rejected resume for ${workflowId} run ${runId}; the snapshot may be missing or already resumed`,
+        );
+      }
     }
+  }
+
+  private async resumeLegacyWorkflow({
+    workflowId,
+    runId,
+    approved,
+  }: {
+    workflowId: string;
+    runId: string;
+    approved: boolean;
+  }) {
+    const mastra = this.mastraService.getMastra();
+    const workflow = mastra.getWorkflowById(workflowId);
+    const run = await workflow.createRun({ runId });
+    this.logger.log(
+      `Resuming legacy workflow ${workflowId} run ${runId} from PostgreSQL-backed Mastra storage`,
+    );
+    return run.resumeStream({ resumeData: { approved } });
   }
 
   private async loadWorkflowSnapshot(
@@ -376,18 +466,38 @@ export class CoreService {
       runId,
     });
 
+    if (snapshot) {
+      this.logger.debug(
+        `Workflow snapshot loaded for ${workflowId} run ${runId}`,
+      );
+    } else {
+      this.logger.warn(
+        `Workflow snapshot missing for ${workflowId} run ${runId}`,
+      );
+    }
+
     return (snapshot ?? null) as Json | null;
   }
 
   private async updateWorkflowRunSuspension(
     workflowRunId: string,
     suspendedStep: Json | null,
+    resumeAgentId?: string | null,
+    resumeToolCallId?: string | null,
+    resumeToolName?: string | null,
   ): Promise<void> {
     await this.db
       .updateTable('preview_platform.workflow_run')
       .set({
         status: 'suspended',
         suspended_step: suspendedStep,
+        ...(resumeAgentId !== undefined
+          ? {
+              resume_agent_id: resumeAgentId,
+              resume_tool_call_id: resumeToolCallId ?? null,
+              resume_tool_name: resumeToolName ?? null,
+            }
+          : {}),
       })
       .where('id', '=', workflowRunId)
       .execute();
@@ -432,44 +542,11 @@ export class CoreService {
       })
       .execute();
 
-    //use the conversationId to get existing messages
-    this.logger.log('Queueing job.....');
-    const streamId = randomUUID();
-    const job = await this.intentQueue.add(
-      'classify-intent',
-      {
-        conversation_id: conversationId,
-        query,
-        project_id: ownedConversation.project_id,
-        stream_id: streamId,
-      },
-      {
-        attempts: 1,
-        removeOnComplete: {
-          age: 60 * 60,
-          count: 100,
-        },
-        removeOnFail: {
-          age: 24 * 60 * 60,
-          count: 100,
-        },
-      },
+    const { streamId } = await this.enqueueIntentJob(
+      query,
+      conversationId,
+      ownedConversation.project_id,
     );
-
-    if (!job.id) {
-      throw new Error('Job id is not received');
-    }
-
-    const jobId = job.id + ':' + 'intent';
-
-    await this.db
-      .insertInto('preview_platform.jobs')
-      .values({
-        id: jobId,
-        conversation_id: conversationId,
-        type: 'intent',
-      })
-      .execute();
 
     return {
       conversation_id: conversationId,

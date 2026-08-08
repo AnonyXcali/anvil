@@ -1,4 +1,5 @@
 import { createWorkflow, createStep } from '@mastra/core/workflows';
+import { Logger } from '@nestjs/common';
 import {
   WorkflowInput,
   WorkflowOutput,
@@ -13,11 +14,31 @@ import { AGENT_DIRECTORY } from 'src/agent.directory';
 import {
   AnvilAgentContext,
   FINAL_RESPONSE_SHAPE,
-  Z_SEARCH_STRUCTURED_OUTPUT,
+  STRUCTURE_PLAN,
 } from 'src/anvil-agent/anvil-agent.types';
+import {
+  extractSearchPhaseEvidence,
+  finalizeSearchPlan,
+} from 'src/anvil-agent/anvil-agent-search-phases';
+import { sanitizeApprovalSummary } from 'src/anvil-agent/anvil-agent-streaming.helpers';
 import { RequestContext } from '@mastra/core/request-context';
-import { EDIT_AGENT_INPUT } from 'src/anvil-agent-edit/anvil-agent-edit.types';
+import { getUpstreamLlmErrorDiagnostics } from 'src/anvil-agent/anvil-agent-llm-error';
+import {
+  ANVIL_AGENT_RUNTIME_CONFIG,
+  ANVIL_SEARCH_EXECUTION_POLICIES,
+  ANVIL_SEARCH_MODE,
+} from 'src/mastra/anvil-agent.config';
+import {
+  EDIT_AGENT_INPUT,
+  toModelFacingEditInput,
+} from 'src/anvil-agent-edit/anvil-agent-edit.types';
 import type { ToolStream } from '@mastra/core/tools';
+import {
+  sortFilesByDependencies,
+  validateStructurePlan,
+} from './structural-ordering';
+import { validateCompressedFileLineRange } from './edit-range.validation';
+import { getEditOperationContractError } from 'src/anvil-agent-edit/edit-operation.validation';
 
 type EditAgentDiagnostics = {
   response: string;
@@ -37,9 +58,20 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }
 
-function assertPositiveInteger(value: number, fieldName: string): void {
-  if (!Number.isFinite(value) || !Number.isInteger(value) || value <= 0) {
-    throw new Error(`${fieldName} must be a positive integer`);
+function validatePatchContract(file: FINAL_RESPONSE_SHAPE): void {
+  const hasPatchToken = file.action_tokens.includes('patch');
+  const hasPatchPayload = file.patch !== null && file.patch.trim().length > 0;
+
+  if (hasPatchToken !== hasPatchPayload) {
+    throw new Error(
+      `patch token requires a non-empty unified diff in patch for ${file.file_path}`,
+    );
+  }
+
+  if (hasPatchToken && file.action_tokens.includes('replace_file')) {
+    throw new Error(
+      `patch cannot be combined with replace_file for ${file.file_path}`,
+    );
   }
 }
 
@@ -86,9 +118,18 @@ async function writeEditAgentDiagnostics(
   writer: ToolStream,
   diagnostics: EditAgentDiagnostics,
 ): Promise<void> {
+  const workflowToolCalls = countWorkflowEditToolEvents(diagnostics.toolCalls);
+  const workflowToolResults = countWorkflowEditToolEvents(
+    diagnostics.toolResults,
+  );
   await writer.custom({
     type: 'edit_agent_diagnostics',
-    payload: diagnostics,
+    payload: {
+      finishReason: diagnostics.finishReason,
+      responseLength: diagnostics.response.length,
+      workflowToolCalls,
+      workflowToolResults,
+    },
   });
 }
 
@@ -145,42 +186,44 @@ async function writeEditWorkflowInvocationFailure(
     payload: {
       workflowToolCalls,
       workflowToolResults,
-      response: diagnostics.response,
       finishReason: diagnostics.finishReason,
     },
   });
 }
 
-function compressFileEdits(files: FINAL_RESPONSE_SHAPE[]): EDIT_AGENT_INPUT {
+function compressFileEdits(
+  files: FINAL_RESPONSE_SHAPE[],
+  structurePlan: STRUCTURE_PLAN,
+): EDIT_AGENT_INPUT {
+  validateStructurePlan(files, structurePlan);
+  const orderedFiles = sortFilesByDependencies(files);
   const fileEditMap = new Map<string, EDIT_AGENT_INPUT[number]>();
 
-  for (const file of files) {
+  for (const file of orderedFiles) {
     const filePath = file.file_path.trim();
 
     if (!filePath) {
       throw new Error('File path is not provided');
     }
 
-    const isWholeFileReplacement = file.action_tokens.includes('replace_file');
-    if (isWholeFileReplacement) {
-      if (
-        !Number.isInteger(file.line_range.startRange) ||
-        !Number.isInteger(file.line_range.endRange) ||
-        file.line_range.startRange !== 0 ||
-        file.line_range.endRange !== 0
-      ) {
-        throw new Error(
-          `replace_file for ${filePath} must use line range 0 to 0`,
-        );
-      }
-    } else {
-      assertPositiveInteger(file.line_range.startRange, 'startRange');
-      assertPositiveInteger(file.line_range.endRange, 'endRange');
-    }
+    validatePatchContract(file);
+    const operationError = getEditOperationContractError({
+      filePath,
+      actionTokens: file.action_tokens,
+      operation: file.operation,
+      fileExists: file.file_exists,
+      code: file.code,
+    });
+    if (operationError) throw new Error(operationError);
 
-    if (file.line_range.startRange > file.line_range.endRange) {
-      throw new Error('startRange must be less than or equal to endRange');
-    }
+    const isWholeFileReplacement = file.action_tokens.includes('replace_file');
+    const isPatch = file.action_tokens.includes('patch');
+
+    validateCompressedFileLineRange(
+      filePath,
+      file.action_tokens,
+      file.line_range,
+    );
 
     const existingFileEdit =
       fileEditMap.get(filePath) ??
@@ -193,6 +236,11 @@ function compressFileEdits(files: FINAL_RESPONSE_SHAPE[]): EDIT_AGENT_INPUT {
         isEdited: false,
         hash: null,
         file_exists: file.file_exists,
+        file_type: file.file_type,
+        architectural_role: file.architectural_role,
+        operation: file.operation,
+        depends_on: file.depends_on,
+        structure_plan: structurePlan,
       } satisfies EDIT_AGENT_INPUT[number]);
 
     const hasWholeFileReplacement = existingFileEdit.instructions.some(
@@ -209,6 +257,17 @@ function compressFileEdits(files: FINAL_RESPONSE_SHAPE[]): EDIT_AGENT_INPUT {
       );
     }
 
+    if (isPatch && existingFileEdit.instructions.length > 0) {
+      throw new Error(`patch must be the only instruction for ${filePath}`);
+    }
+    if (
+      existingFileEdit.instructions.some((instruction) =>
+        instruction.action_tokens.includes('patch'),
+      )
+    ) {
+      throw new Error(`patch must be the only instruction for ${filePath}`);
+    }
+
     if (existingFileEdit.file_exists !== file.file_exists) {
       throw new Error(`Conflicting file_exists values for ${filePath}`);
     }
@@ -219,6 +278,7 @@ function compressFileEdits(files: FINAL_RESPONSE_SHAPE[]): EDIT_AGENT_INPUT {
       action_tokens: file.action_tokens,
       precise_instruction: file.precise_instruction,
       code: file.code,
+      patch: file.patch,
       verified: false,
     });
 
@@ -234,6 +294,7 @@ function compressFileEdits(files: FINAL_RESPONSE_SHAPE[]): EDIT_AGENT_INPUT {
 }
 
 const createSearchStep = () => {
+  const logger = new Logger('AnvilAgentWorkflowSearchStep');
   const searchStep = createStep({
     id: 'anvil-agent-workflow-search-step',
     inputSchema: WorkflowInput,
@@ -246,24 +307,45 @@ const createSearchStep = () => {
       const requestContext = new RequestContext<AnvilAgentContext>();
       requestContext.set('projectId', inputData.projectId);
       requestContext.set('callCount', 0);
+      const searchPolicy = ANVIL_SEARCH_EXECUTION_POLICIES[ANVIL_SEARCH_MODE];
+      requestContext.set('maxSearchCalls', searchPolicy.maxSearchCalls);
 
       const searchAgent = mastra.getAgent(AGENT_DIRECTORY.anvilSearchAgent);
-      const execution = await searchAgent.generate(inputData.request, {
-        maxSteps: 10,
-        structuredOutput: {
-          schema: Z_SEARCH_STRUCTURED_OUTPUT,
-        },
-        requestContext,
-      });
-
-      const parsed = Z_SEARCH_STRUCTURED_OUTPUT.safeParse(execution.object);
-
-      // TODO: Implement retry behavior for invalid or incomplete search output.
-      if (!parsed.success) {
-        throw new Error(`Invalid search output: ${parsed.error.message}`);
+      let execution: {
+        toolCalls?: unknown;
+        toolResults?: unknown;
+      };
+      try {
+        execution = await searchAgent.generate(inputData.request, {
+          maxSteps: searchPolicy.maxSteps,
+          requestContext,
+        });
+      } catch (error: unknown) {
+        logger.error(
+          JSON.stringify(
+            getUpstreamLlmErrorDiagnostics(
+              error,
+              ANVIL_AGENT_RUNTIME_CONFIG.search.model,
+              ANVIL_AGENT_RUNTIME_CONFIG.search.model.split('/')[0],
+            ),
+          ),
+        );
+        throw error;
       }
 
-      const res = parsed.data;
+      const evidence = extractSearchPhaseEvidence({
+        toolCalls: execution.toolCalls,
+        toolResults: execution.toolResults,
+        policy: searchPolicy,
+      });
+      const finalizerAgent = mastra.getAgent(
+        AGENT_DIRECTORY.anvilSearchFinalizerAgent,
+      );
+      const res = await finalizeSearchPlan({
+        finalizerAgent,
+        request: inputData.request,
+        evidence,
+      });
 
       if (!res.is_final) {
         throw new Error('Search agent did not return a final response');
@@ -285,6 +367,7 @@ const createSearchStep = () => {
         response: {
           result: res.final.files_that_require_change,
           error: null,
+          structure_plan: res.final.structure_plan,
         },
       };
       return payload;
@@ -302,11 +385,16 @@ const createPlanStep = () => {
     resumeSchema: PlanApprovalResumeInput,
     suspendSchema: PlanApprovalSuspendOutput,
     execute: async (context) => {
-      const { inputData, mastra, writer, resumeData } = context;
+      const { inputData, mastra, resumeData } = context;
 
       if (resumeData?.approved === true) {
+        validateStructurePlan(
+          inputData.response.result,
+          inputData.response.structure_plan,
+        );
         return {
-          files: inputData.response.result,
+          files: sortFilesByDependencies(inputData.response.result),
+          structure_plan: inputData.response.structure_plan,
         };
       }
 
@@ -321,12 +409,12 @@ const createPlanStep = () => {
         [
           'Create a strictly non-technical approval summary for these proposed application changes.',
           'Return only the summary text.',
-          JSON.stringify(inputData.response.result, null, 2),
+          'Use the structural plan and file changes as internal context. Never reveal file paths, dependency metadata, patches, or implementation details in the summary.',
+          JSON.stringify(inputData.response, null, 2),
         ].join('\n\n'),
       );
 
-      await execution.textStream.pipeTo(writer);
-      const summary = await execution.text;
+      const summary = sanitizeApprovalSummary(await execution.text);
 
       return context.suspend({
         type: 'approval_required',
@@ -359,6 +447,12 @@ const createEditStep = () => {
       const editAgentRequestContext = new RequestContext<AnvilAgentContext>();
       editAgentRequestContext.set('projectId', projectId);
       editAgentRequestContext.set('callCount', 0);
+      const structurePlan = inputData[0]?.structure_plan;
+      if (!structurePlan) {
+        throw new Error('Canonical structural plan is unavailable for editing');
+      }
+      editAgentRequestContext.set('structurePlan', structurePlan);
+      editAgentRequestContext.set('multiFileHandoff', inputData.length > 1);
       editAgentRequestContext.set('editProgress', async (event) => {
         try {
           await writer.custom({
@@ -384,7 +478,7 @@ const createEditStep = () => {
           'Process this normalized FILE_EDIT[] payload.',
           'Use your tools for missing file or folder prerequisites, then invoke run_edit_workflow when the payload is workflow-ready.',
           'Return a concise non-technical summary of the completed changes.',
-          JSON.stringify(inputData, null, 2),
+          JSON.stringify(toModelFacingEditInput(inputData), null, 2),
         ].join('\n\n'),
         {
           maxSteps: 20,
@@ -423,7 +517,8 @@ export const createFrontendEngineeringWorkflow = () => {
     .then(createPlanStep())
     .map(
       // eslint-disable-next-line @typescript-eslint/require-await
-      async ({ inputData }) => compressFileEdits(inputData.files),
+      async ({ inputData }) =>
+        compressFileEdits(inputData.files, inputData.structure_plan),
       { id: 'anvil-agent-workflow-edit-input-compression' },
     )
     .then(createEditStep())

@@ -7,6 +7,8 @@ describe('validateEnv', () => {
         PORT: '4500',
         OPENAI_API_KEY: 'test-key',
         OPENAI_MODEL: 'gpt-4o-mini',
+        ANTHROPIC_API_KEY: 'test-anthropic-key',
+        MASTRA_DATABASE_URL: 'postgresql://localhost/mastra',
         VAST_BASE_URL: 'http://localhost:8080/v1',
         VAST_AUTH_URL: 'http://localhost:8080/auth',
         VAST_MODEL: 'Qwen/Qwen2.5-Coder-7B-Instruct',
@@ -24,6 +26,8 @@ describe('validateEnv', () => {
       PORT: 4500,
       OPENAI_API_KEY: 'test-key',
       OPENAI_MODEL: 'gpt-4o-mini',
+      ANTHROPIC_API_KEY: 'test-anthropic-key',
+      MASTRA_DATABASE_URL: 'postgresql://localhost/mastra',
       VAST_BASE_URL: 'http://localhost:8080/v1',
       VAST_AUTH_URL: 'http://localhost:8080/auth',
       VAST_MODEL: 'Qwen/Qwen2.5-Coder-7B-Instruct',
@@ -45,6 +49,8 @@ describe('validateEnv', () => {
       validateEnv({
         OPENAI_API_KEY: 'test-key',
         OPENAI_MODEL: 'gpt-4o-mini',
+        ANTHROPIC_API_KEY: 'test-anthropic-key',
+        MASTRA_DATABASE_URL: 'postgresql://localhost/mastra',
         VAST_BASE_URL: 'http://localhost:8080/v1',
         VAST_AUTH_URL: 'http://localhost:8080/auth',
         VAST_MODEL: 'Qwen/Qwen2.5-Coder-7B-Instruct',
@@ -67,6 +73,8 @@ describe('validateEnv', () => {
     expect(() =>
       validateEnv({
         OPENAI_MODEL: 'gpt-4o-mini',
+        ANTHROPIC_API_KEY: 'test-anthropic-key',
+        MASTRA_DATABASE_URL: 'postgresql://localhost/mastra',
         VAST_BASE_URL: 'http://localhost:8080/v1',
         VAST_AUTH_URL: 'http://localhost:8080/auth',
         VAST_MODEL: 'Qwen/Qwen2.5-Coder-7B-Instruct',
@@ -81,6 +89,8 @@ describe('validateEnv', () => {
     expect(() =>
       validateEnv({
         OPENAI_API_KEY: 'test-key',
+        ANTHROPIC_API_KEY: 'test-anthropic-key',
+        MASTRA_DATABASE_URL: 'postgresql://localhost/mastra',
         VAST_BASE_URL: 'http://localhost:8080/v1',
         VAST_AUTH_URL: 'http://localhost:8080/auth',
         VAST_MODEL: 'Qwen/Qwen2.5-Coder-7B-Instruct',
@@ -96,6 +106,8 @@ describe('validateEnv', () => {
       validateEnv({
         OPENAI_API_KEY: 'test-key',
         OPENAI_MODEL: 'gpt-4o-mini',
+        ANTHROPIC_API_KEY: 'test-anthropic-key',
+        MASTRA_DATABASE_URL: 'postgresql://localhost/mastra',
         VAST_AUTH_URL: 'http://localhost:8080/auth',
         VAST_MODEL: 'Qwen/Qwen2.5-Coder-7B-Instruct',
         SSH_HOST: 'localhost',
@@ -110,6 +122,8 @@ describe('validateEnv', () => {
       validateEnv({
         OPENAI_API_KEY: 'test-key',
         OPENAI_MODEL: 'gpt-4o-mini',
+        ANTHROPIC_API_KEY: 'test-anthropic-key',
+        MASTRA_DATABASE_URL: 'postgresql://localhost/mastra',
         VAST_BASE_URL: 'http://localhost:8080/v1',
         VAST_AUTH_URL: 'http://localhost:8080/auth',
         VAST_MODEL: 'Qwen/Qwen2.5-Coder-7B-Instruct',
@@ -124,6 +138,8 @@ describe('validateEnv', () => {
       validateEnv({
         OPENAI_API_KEY: 'test-key',
         OPENAI_MODEL: 'gpt-4o-mini',
+        ANTHROPIC_API_KEY: 'test-anthropic-key',
+        MASTRA_DATABASE_URL: 'postgresql://localhost/mastra',
         VAST_BASE_URL: 'http://localhost:8080/v1',
         VAST_AUTH_URL: 'http://localhost:8080/auth',
         VAST_MODEL: 'Qwen/Qwen2.5-Coder-7B-Instruct',

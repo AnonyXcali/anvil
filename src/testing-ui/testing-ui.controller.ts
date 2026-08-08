@@ -38,13 +38,13 @@ export class TestingUiController {
 
   @Post('/projects')
   async createProject(
-    @Body() body: { name: string },
+    @Body() body: { description: string },
     @Session() session: UserSession,
     @Res({ passthrough: true }) response: Response,
   ) {
     this.testingUiService.assertEnabled();
     const created = await this.testingUiService.createProject(
-      body.name,
+      body.description,
       session.user.id,
     );
     return response.redirect(
@@ -134,20 +134,6 @@ export class TestingUiController {
   ) {
     this.testingUiService.assertEnabled();
     return this.testingUiService.stopProject(projectId, session.user.id);
-  }
-
-  @Patch('/projects/:projectId')
-  async renameProject(
-    @Param('projectId') projectId: string,
-    @Body() body: { name: string },
-    @Session() session: UserSession,
-  ) {
-    this.testingUiService.assertEnabled();
-    return this.testingUiService.renameProject(
-      projectId,
-      body.name,
-      session.user.id,
-    );
   }
 
   @Delete('/projects/:projectId')

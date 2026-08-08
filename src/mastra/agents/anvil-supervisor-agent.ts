@@ -2,6 +2,7 @@ import { Agent, type ToolsInput } from '@mastra/core/agent';
 import { Memory } from '@mastra/memory';
 import type { AnvilAgentContext } from 'src/anvil-agent/anvil-agent.types';
 import type { createFrontendEngineeringWorkflow } from 'src/anvil-agent-supervisor/anvil-agent-supervisor.workflow';
+import { ANVIL_AGENT_RUNTIME_CONFIG } from '../anvil-agent.config';
 
 export function createAnvilSupervisorAgent(deps: {
   frontendEngineeringWorkflow: ReturnType<
@@ -35,9 +36,11 @@ export function createAnvilSupervisorAgent(deps: {
       }
 
       Do not use this workflow for non-frontend requests.
+
+      If the workflow returns an error or failed status, stop immediately. Do not retry the workflow or issue another workflow call. Report the failure without claiming that changes were applied.
       `;
     },
-    model: 'openai/gpt-5.6-luna',
+    ...ANVIL_AGENT_RUNTIME_CONFIG.supervisor,
     memory: new Memory(),
     workflows: {
       frontendEngineeringWorkflow: deps.frontendEngineeringWorkflow,

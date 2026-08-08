@@ -90,6 +90,7 @@ export const up = (pgm) => {
       name TEXT NOT NULL,
       status preview_platform.project_status NOT NULL DEFAULT 'active',
       template preview_platform.templates default 'react',
+      description TEXT NOT NULL,
       user_id text NOT NULL,
       active_port INTEGER,
       container_name text,

@@ -6,6 +6,7 @@ import { IntentService } from './intent.service';
 import { JobService } from 'src/job/job.service';
 import { AnvilAgentSupervisorService } from 'src/anvil-agent-supervisor/anvil-agent-supervisor.service';
 import { AnvilAgentStreamPublisher } from 'src/anvil-agent/anvil-agent-stream-publisher.service';
+import { StreamEventType } from 'src/anvil-agent/anvil-agent-chunk.dictionary';
 
 const INVALID_INTENT_MESSAGE =
   "I'm sorry, I couldn't determine how to handle that request.";
@@ -70,10 +71,24 @@ export class IntentProcessor extends WorkerHost {
         streamId,
       );
     } else if (intent === 'offload') {
+      await this.streamPublisher.publish({
+        chunk: {
+          type: StreamEventType.TASK_PREPARATION,
+          payload: {
+            status: 'running',
+            message: 'Preparing summary of task...',
+          },
+        },
+        conversationId: job.data.conversation_id,
+        jobId: `${job.id}:intent`,
+        source: 'intent',
+        streamId,
+      });
       await this.anvilAgentSupervisorService.anvilSupervisorAgentQueue(
         job.data.conversation_id,
         job.data.query,
         job.data.project_id,
+        streamId,
       );
     }
 

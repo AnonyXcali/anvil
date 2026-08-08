@@ -8,14 +8,21 @@ import { DB } from 'src/db/db.types';
 import {
   AnvilAgentContext,
   SEARCH_STRUCTURED_OUTPUT,
-  Z_SEARCH_STRUCTURED_OUTPUT,
 } from './anvil-agent.types';
+import {
+  extractSearchPhaseEvidence,
+  finalizeSearchPlan,
+} from './anvil-agent-search-phases';
 import { AGENT_DIRECTORY } from 'src/agent.directory';
 import { ChannelsService } from 'src/channels/channels.service';
 import { RequestContext } from '@mastra/core/request-context';
 import { MessageListInput } from '@mastra/core/agent/message-list';
 import { generateKeys } from 'src/utils';
 import { StreamEventType } from './anvil-agent-chunk.dictionary';
+import {
+  ANVIL_SEARCH_EXECUTION_POLICIES,
+  ANVIL_SEARCH_MODE,
+} from 'src/mastra/anvil-agent.config';
 
 @Injectable()
 export class AnvilAgentService {
@@ -57,12 +64,11 @@ export class AnvilAgentService {
     const requestContext = new RequestContext<AnvilAgentContext>();
     requestContext.set('projectId', projectId);
     requestContext.set('callCount', 0);
+    const searchPolicy = ANVIL_SEARCH_EXECUTION_POLICIES[ANVIL_SEARCH_MODE];
+    requestContext.set('maxSearchCalls', searchPolicy.maxSearchCalls);
     const agent = this.mastraService.getAgent(AGENT_DIRECTORY.anvilSearchAgent);
     const resultStream = await agent.stream(messages, {
-      maxSteps: 10,
-      structuredOutput: {
-        schema: Z_SEARCH_STRUCTURED_OUTPUT,
-      },
+      maxSteps: searchPolicy.maxSteps,
       requestContext,
       // providerOptions: {
       //   openai: ANVIL_AGENT_CONFIGURATION,
@@ -74,8 +80,8 @@ export class AnvilAgentService {
       jobId,
     );
 
-    let finalOutput: SEARCH_STRUCTURED_OUTPUT | undefined;
     let finalInstructionsPublished = false;
+    let searchStreamError: unknown;
 
     const publishFinalInstructions = async (
       output: SEARCH_STRUCTURED_OUTPUT,
@@ -156,32 +162,6 @@ export class AnvilAgentService {
           this.logger.log(`LLM response: ${chunkedData.line}`);
           continue;
         }
-        case 'object-result': {
-          const parsed = Z_SEARCH_STRUCTURED_OUTPUT.safeParse(chunk.object);
-          this.logger.log('LLM PROCESSING FINISHED');
-
-          if (!parsed.success) {
-            this.logger.log('=========ANVIL ERROR OCCURED==========');
-            this.logger.error(parsed.error.message);
-            this.logger.log('=========ANVIL ERROR OCCURED==========');
-            await this.channelService.publishAndStoreChunk(
-              'Something went wrong.',
-              seqKey,
-              listKey,
-              metaKey,
-              channelKey,
-            );
-            continue;
-          }
-
-          const output = parsed.data;
-          finalOutput = output;
-
-          if (output.is_final) {
-            await publishFinalInstructions(output);
-          }
-          continue;
-        }
         case 'finish': {
           this.logger.log(
             `
@@ -226,28 +206,33 @@ export class AnvilAgentService {
         case 'error':
           this.logger.fatal('=========ERROR OCCURED=======');
           this.logger.error(chunk.payload.error);
+          searchStreamError = chunk.payload.error;
           continue;
         default:
           continue;
       }
     }
 
-    if (!finalOutput) {
-      const parsed = Z_SEARCH_STRUCTURED_OUTPUT.safeParse(
-        await resultStream.object,
-      );
-
-      if (parsed.success) {
-        finalOutput = parsed.data;
-        await publishFinalInstructions(finalOutput);
-      } else {
-        this.logger.error(parsed.error.message);
-      }
+    if (searchStreamError) {
+      throw searchStreamError instanceof Error
+        ? searchStreamError
+        : new Error(JSON.stringify(searchStreamError));
     }
 
-    if (!finalOutput) {
-      throw new Error('Anvil agent completed without structured output');
-    }
+    const evidence = extractSearchPhaseEvidence({
+      toolCalls: await resultStream.toolCalls,
+      toolResults: await resultStream.toolResults,
+      policy: searchPolicy,
+    });
+    const finalizerAgent = this.mastraService.getAgent(
+      AGENT_DIRECTORY.anvilSearchFinalizerAgent,
+    );
+    const finalOutput: SEARCH_STRUCTURED_OUTPUT = await finalizeSearchPlan({
+      finalizerAgent,
+      request: JSON.stringify(messages),
+      evidence,
+    });
+    await publishFinalInstructions(finalOutput);
 
     return finalOutput;
   }

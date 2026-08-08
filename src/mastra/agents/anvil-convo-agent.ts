@@ -5,6 +5,7 @@ import { createAnvilAgentSearchTool } from '../tools/anvil-agent-search-tool';
 import { createAnvilWebSearchTool } from '../tools/anvil-web-search-tool';
 import { createAnvilWebContentTool } from '../tools/anvil-web-content-tool';
 import { createAnvilPreviewBrowserTool } from '../tools/anvil-preview-browser-tool';
+import { ANVIL_AGENT_RUNTIME_CONFIG } from '../anvil-agent.config';
 import type { AppEnv } from 'src/config/env.validation';
 
 const SEARCH_TOOLS = `
@@ -259,13 +260,12 @@ export function createAnvilConversationAgent(deps: {
     AppEnv,
     'EXA_KEY' | 'FIRECRAWL_KEY' | 'LIGHTPANDA_KEY' | 'LIGHTPANDA_ENDPOINT'
   >;
-  model: string;
 }) {
   return new Agent({
     id: 'anvil-convo',
     name: 'Anvil Conversation Agent',
     instructions: ANVIL_CONVO_PROMPT,
-    model: 'openai/gpt-5.6-terra', //deps.model,
+    ...ANVIL_AGENT_RUNTIME_CONFIG.conversation,
     tools: {
       anvilAgentSearchTool: createAnvilAgentSearchTool(
         deps.anvilAgentSearchService,

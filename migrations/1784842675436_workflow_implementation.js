@@ -27,6 +27,9 @@ export const up = (pgm) => {
       project_id uuid NOT NULL,
       status preview_platform.workflow_job_status DEFAULT 'pending',
       suspended_step jsonb,
+      resume_agent_id text,
+      resume_tool_call_id text,
+      resume_tool_name text,
       created_at timestamptz NOT NULL DEFAULT now(),
       updated_at timestamptz NOT NULL DEFAULT now(),
 
@@ -46,6 +49,15 @@ export const up = (pgm) => {
 
     COMMENT ON COLUMN "preview_platform"."workflow_run"."suspended_step"
     IS 'Mastra workflow snapshot captured when a workflow suspends';
+
+    COMMENT ON COLUMN "preview_platform"."workflow_run"."resume_agent_id"
+    IS 'Mastra agent that owns the suspended approval run';
+
+    COMMENT ON COLUMN "preview_platform"."workflow_run"."resume_tool_call_id"
+    IS 'Suspended tool call identifier used to validate resumption';
+
+    COMMENT ON COLUMN "preview_platform"."workflow_run"."resume_tool_name"
+    IS 'Suspended tool name used for resumption diagnostics';
 
     -- TODO: After this migration is run and DB types are regenerated, create a
     -- service method that updates workflow_run.status by workflow_run.id.

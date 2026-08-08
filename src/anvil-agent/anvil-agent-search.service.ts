@@ -7,6 +7,7 @@ import {
 } from './anvil-agent.types';
 import { ToolExecutionContext } from '@mastra/core/tools';
 import { StreamEventType } from './anvil-agent-chunk.dictionary';
+import { assertValidSearchToolRequest } from './anvil-agent-search.validation';
 
 @Injectable()
 export class AnvilAgentSearchService {
@@ -20,6 +21,8 @@ export class AnvilAgentSearchService {
     count: number,
     context: ToolExecutionContext,
   ): Promise<SEARCH_TOOL_RESPONSE> {
+    assertValidSearchToolRequest(request);
+
     switch (request.type) {
       case 'file_search':
         await context?.writer?.custom({
@@ -217,14 +220,13 @@ export class AnvilAgentSearchService {
       throw new Error('Something went wrong in expansion tool..');
     }
 
-    if (!request.query.files_path_for_expansion.ranges) {
-      throw new Error('INVALID RANGE ERROR');
+    const ranges = request.query.files_path_for_expansion.ranges;
+    if (!ranges) {
+      throw new Error('Invalid expansion ranges');
     }
 
-    const startLine =
-      request.query.files_path_for_expansion.ranges[0]?.startLine;
-
-    const endLine = request.query.files_path_for_expansion.ranges[0]?.endLine;
+    const startLine = ranges[0]?.startLine;
+    const endLine = ranges[0]?.endLine;
 
     await context?.writer?.custom({
       type: StreamEventType.SEARCH_TOOL_EXPANSIVE_SEARCH_LOG,

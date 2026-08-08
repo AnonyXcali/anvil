@@ -22,6 +22,9 @@ services:
       LIGHTPANDA_KEY: ${LIGHTPANDA_KEY}
       FIRECRAWL_KEY: ${FIRECRAWL_KEY}
       LIGHTPANDA_ENDPOINT: ${LIGHTPANDA_ENDPOINT}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+
+      MASTRA_DATABASE_URL: postgresql://preview_user:preview_password@postgres:5432/preview_platform
 
       REDIS_HOST: redis
       REDIS_PORT: 6379

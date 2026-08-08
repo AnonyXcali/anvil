@@ -93,6 +93,7 @@ export interface PreviewPlatformProject {
   active_port: number | null;
   container_name: string | null;
   created_at: Generated<Timestamp>;
+  description: string;
   id: Generated<string>;
   name: string;
   preview_url: string | null;
@@ -177,6 +178,18 @@ export interface PreviewPlatformWorkflowRun {
    */
   id: Generated<string>;
   project_id: string;
+  /**
+   * Mastra agent that owns the suspended approval run
+   */
+  resume_agent_id: string | null;
+  /**
+   * Suspended tool call identifier used to validate resumption
+   */
+  resume_tool_call_id: string | null;
+  /**
+   * Suspended tool name used for resumption diagnostics
+   */
+  resume_tool_name: string | null;
   run_id: string;
   status: Generated<PreviewPlatformWorkflowJobStatus | null>;
   /**
