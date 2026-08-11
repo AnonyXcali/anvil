@@ -6,12 +6,14 @@ import { DbModule } from 'src/db/db.module';
 import { ChannelsModule } from 'src/channels/channels.module';
 import { SharedredisModule } from 'src/sharedredis/sharedredis.module';
 import { AnvilAgentStreamPublisher } from 'src/anvil-agent/anvil-agent-stream-publisher.service';
+import { AnvilAgentSupervisorModule } from 'src/anvil-agent-supervisor/anvil-agent-supervisor.module';
 
 @Module({
   imports: [
     SharedredisModule,
     ChannelsModule,
     DbModule,
+    AnvilAgentSupervisorModule,
     BullModule.registerQueue({
       name: 'intent-execution',
     }),

@@ -1,13 +1,15 @@
 import { OnWorkerEvent, Processor, WorkerHost } from '@nestjs/bullmq';
 import { Job } from 'bullmq';
 import { SshService } from '../ssh/ssh.service';
-import { generateKeys } from '../utils';
 import { Kysely } from 'kysely';
 import { KYSELY_DB } from 'src/tokens';
 import type { DB } from 'src/db/db.types';
 import { Logger, Inject } from '@nestjs/common';
-import { ChannelsService } from 'src/channels/channels.service';
 import { JobService } from 'src/job/job.service';
+import { MastraService } from '@mastra/nestjs';
+import { AGENT_DIRECTORY } from 'src/agent.directory';
+import { ProjectNameSchema } from 'src/project/project-name.types';
+import { CoreService } from 'src/core/core.service';
 
 type TaskJobData = {
   projectId: string;
@@ -31,8 +33,9 @@ export class CodeGenProcessor extends WorkerHost {
   constructor(
     @Inject(KYSELY_DB) private readonly db: Kysely<DB>,
     private readonly sshService: SshService,
-    private readonly channelService: ChannelsService,
     private readonly jobService: JobService,
+    private readonly mastraService: MastraService,
+    private readonly coreService: CoreService,
   ) {
     super();
   }
@@ -53,6 +56,39 @@ export class CodeGenProcessor extends WorkerHost {
 
     const { conversationId, port, projectId } = job.data || {};
 
+    const project = await this.db
+      .selectFrom('preview_platform.project')
+      .select(['description'])
+      .where('id', '=', projectId)
+      .executeTakeFirstOrThrow();
+
+    let projectName = `anvil-project-${projectId.slice(0, 8)}`;
+    try {
+      const result = await this.mastraService
+        .getAgent(AGENT_DIRECTORY.anvilProjectNameAgent)
+        .generate(project.description, {
+          structuredOutput: { schema: ProjectNameSchema },
+        });
+      const parsed = ProjectNameSchema.safeParse(result.object);
+      if (parsed.success && parsed.data.name.trim()) {
+        projectName = parsed.data.name.trim();
+      } else {
+        this.logger.warn(
+          `Project name agent returned an invalid name for ${projectId}`,
+        );
+      }
+    } catch (error: unknown) {
+      this.logger.warn(
+        `Project name inference failed for ${projectId}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+
+    await this.db
+      .updateTable('preview_platform.project')
+      .set({ name: projectName })
+      .where('id', '=', projectId)
+      .execute();
+
     await this.sshService.previewBuild(
       port,
       `preview-dev-${projectId}`,
@@ -70,26 +106,13 @@ export class CodeGenProcessor extends WorkerHost {
       .where('id', '=', job.data.projectId)
       .execute();
 
-    const { seqKey, listKey, metaKey, channelKey } = generateKeys(
+    await this.coreService.enqueueIntentJob(
+      project.description,
       conversationId,
-      job.id,
-    );
-
-    // TODO(security): Do not expose previews through direct unauthenticated HTTP URLs.
-    // Route them through an authenticated HTTPS proxy or enforce network allowlists.
-    const message = `The preview is on http://${process.env.SSH_HOST}:${port}/`;
-
-    await this.channelService.publishAndStoreChunk(
-      message,
-      seqKey,
-      listKey,
-      metaKey,
-      channelKey,
-      { streamId: `${job.id}:scaffold-project` },
+      projectId,
     );
 
     return {
-      message,
       conversationId,
     };
   }
@@ -97,17 +120,8 @@ export class CodeGenProcessor extends WorkerHost {
   @OnWorkerEvent('completed')
   async onWorkerCompletion(
     job: Job<TaskJobData>,
-    result: { message: string; conversationId: string },
+    result: { conversationId: string },
   ) {
-    await this.db
-      .insertInto('preview_platform.message')
-      .values({
-        message: result.message,
-        role: 'system',
-        conversation_id: result.conversationId,
-      })
-      .execute();
-
     if (!job.id) {
       throw new Error('Failed to update job status');
     }

@@ -24,6 +24,8 @@ Create a local `.env` from `.env.example` and provide the required runtime value
 - `OPENAI_API_KEY` and `OPENAI_MODEL`: model access for conversation and agent flows.
 - `VAST_BASE_URL`, `VAST_AUTH_URL`, and `VAST_MODEL`: optional VAST-compatible model endpoint settings.
 - `POSTGRES_USER`, `POSTGRES_PASSWORD`, and `POSTGRES_DB`: Postgres settings used by the local stack.
+- `DATABASE_URL`: application database connection string.
+- `MASTRA_DATABASE_URL`: Mastra storage connection string for agent memory and workflow snapshots.
 - `BETTER_AUTH_SECRET` and `BETTER_AUTH_URL`: auth/session configuration.
 - `SSH_HOST`, `SSH_PORT`, `SSH_USERNAME`, and `SSH_PRIVATE_KEY_PATH`: remote preview workspace access.
 - `MASTRA_PLATFORM_ACCESS_TOKEN` and `MASTRA_PROJECT_ID`: Mastra platform configuration when using platform-backed features.
@@ -80,14 +82,16 @@ Intent routing
     v                              v
 Instant conversation          Project change
     |                              |
-Text streamed over SSE       Search → plan → approval
+Text streamed over SSE       Search → structural plan → approval
                                    |
-                              Edit → verify → preview update
+                         staged edit → verify → preview update
 ```
 
 The conversation agent can answer about Anvil, inspect the current project, look up relevant public information, and inspect the rendered preview when needed. Its user-facing stream contains the assistant response rather than internal reasoning or tool details.
 
-The project-change path runs through a Supervisor Agent. It searches the project, prepares a readable plan, pauses for human approval, and then delegates the approved work to editing and verification stages. Progress, approval requests, completion, and failures are available through the same conversation stream, and completed stream chunks can be replayed by the UI.
+The project-change path runs through a Supervisor Agent. A search phase reads project context and performs bounded repository searches; a separate tool-free planning phase turns that evidence into structural metadata and dependency ordering. The workflow then prepares a business-facing approval summary, pauses for human approval, and delegates the approved work to editing and verification stages. Technical file plans remain internal to the workflow.
+
+Approved changes are handled through a staged edit transaction. Existing files are downloaded to a job-scoped backend workspace and can use line-range edits, unified patches, or complete-file replacement. New files are created locally during staging and bypass the existing-file download/edit path. Files are validated before remote commit; related multi-file changes are committed in deterministic order with backups and best-effort rollback on failure.
 
 Preview work is executed on a configured SSH host. The backend manages project-specific remote workspaces, builds Docker previews, controls project containers, and performs project-scoped file operations through SSH/SFTP.
 
@@ -100,8 +104,13 @@ Preview work is executed on a configured SSH host. The backend manages project-s
 - Project workspaces: creates isolated project records and remote workspace folders for generated previews.
 - React preview generation: creates and updates Vite React preview projects.
 - Supervisor workflow: coordinates search, planning, approval, editing, verification, and preview updates.
+- Structural planning: records file ownership, architectural roles, dependencies, directory creation, preservation constraints, and deterministic execution order.
+- Discoverable search guidance: loads bundled `mastra-skills/` playbooks for repository search, project structure, architecture history, CSS/TSX analysis, and edit planning. Runtime schemas and backend validation remain authoritative.
 - Human-in-the-loop approval: pauses before applying proposed changes and resumes after accept or deny.
-- Safe project editing: applies targeted or complete file changes, verifies the result, and updates the remote workspace.
+- Safe staged project editing: applies line-range edits, unified patches, complete-file replacement, and new-file creation locally before verification and remote commit.
+- Cross-file validation: checks staged imports, route targets, CSS syntax, stylesheet selectors, and supported project build/type checks before upload.
+- Durable Mastra state: stores agent memory and suspended workflow snapshots in PostgreSQL, while Redis carries queues and stream chunks.
+- Application-owned runtime state: editing agents return file instructions only; the backend owns hashes, backups, verification state, staging manifests, uploads, rollback, and cleanup.
 - Context-aware conversation tools: support project search, public web research, page content lookup, and preview inspection.
 - SSH project tools: support project-scoped file download, upload, backup, delete, create, verify, and bounded reads.
 - Streaming helpers: normalize workflow, approval, status, error, and response events for the testing UI.
@@ -109,6 +118,7 @@ Preview work is executed on a configured SSH host. The backend manages project-s
 
 ## Future plans
 
+- Evolve the workflow toward smaller milestones and HITL-gated repair loops, using a project `architecture/BUGS.md` to track unresolved issues between supervisor runs.
 - Reduce token usage across search, planning, edit, and verification loops.
 - Add the ability to switch models per agent or workflow stage.
 - Bring live preview access directly into the application.

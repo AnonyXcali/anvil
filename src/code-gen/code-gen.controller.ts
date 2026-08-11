@@ -1,4 +1,5 @@
 import { Controller, Get, Param, Post, Body, HttpCode } from '@nestjs/common';
+import { Session, type UserSession } from '@thallesp/nestjs-better-auth';
 import { CodeGenService } from './code-gen.service';
 
 //TODO: p0-dev-user-01 is an unsecure user.
@@ -15,12 +16,15 @@ export class CodeGenController {
   @Post()
   @HttpCode(202)
   async generate(
-    @Body() body: { message: string; project_name: string },
+    @Body() body: { description: string },
+    @Session() session: UserSession,
   ): Promise<{
-    jobId: string | undefined;
+    jobId: string;
+    projectId: string;
+    conversationId: string;
     status: string;
   }> {
-    return await this.codeGenService.enqueue(body.message, body.project_name);
+    return await this.codeGenService.enqueue(body.description, session.user.id);
   }
 
   //pass the project

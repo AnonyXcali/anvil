@@ -6,6 +6,8 @@ The chunk dictionary in `src/anvil-agent/anvil-agent-chunk.dictionary.ts` define
 
 Nested edit operations emit best-effort `edit_progress` writer events. The outer workflow maps these to the stable `edit_status` UI event; nested workflows do not publish directly to Redis or expose a separate Mastra lifecycle stream.
 
+Initial project creation does not publish a preview URL as a transcript chunk. The scaffold worker persists the preview URL on the project, stores the submitted description as the first user message, and then starts the existing intent stream. Offload initialization emits a stable `task_preparation` event with the visible assistant message `Preparing summary of task...`; the original intent stream ID is propagated into the supervisor queue so preparation and supervisor events remain associated with one UI composer.
+
 The frontend consumes the channel through SSE. Supervisor streams may include reasoning, tool calls, tool-call deltas, workflow lifecycle, approval-required, status, and final response information. Instant conversation streams intentionally publish only plain text delta chunks; the UI appends each received chunk to the active assistant message. Stored chunks support replay for a conversation stream. Ordering follows the Redis sequence generated for the conversation and job stream.
 
 Instant conversation requests receive a request-level `stream_id` when `/talk` queues the intent job. That ID is returned in the HTTP response, carried through the intent and conversation queues, and included as SSE envelope metadata on every instant-conversation chunk. The Redis sequence remains scoped to the conversation worker job; the UI uses `stream_id` to keep sequence tracking isolated across requests and to associate chunks with the active composer.
@@ -33,3 +35,21 @@ The canonical implementation locations are `src/anvil-agent/anvil-agent-streamin
 
 If a new entity is intentionally absent from one of these maps, the change must document why and include a test or explicit architectural rationale showing that the omission is deliberate.
 Diagnostic chunks such as `edit_verification_*`, `css_validation`, and `history_*_warning` are internal observability events. They remain loggable for backend diagnostics but are not stable frontend events; `edit_progress` is the only nested edit progress event mapped to the UI as `edit_status`.
+
+Patch application diagnostics (`patch_apply_started`, `patch_apply_completed`,
+`patch_apply_conflict`, and `patch_apply_failed`) contain only project-relative
+file paths, strategy/status metadata, hunk summaries, and sanitized failure
+reasons. Raw verifier patch tool arguments are deliberately excluded from
+backend stream logging; the stable frontend contract remains `edit_status`.
+
+Multi-file edit runs also use the internal workflow steps
+`anvil-edit-agent-coordinated-upload-files-step` and
+`anvil-edit-agent-coordinated-cleanup-files-step`. They retain the same
+`workflow-resume` source and stable `edit_status` mapping. Rollback failures
+are diagnostic only and never replace the original upload failure.
+
+The multi-file staged transaction also emits sanitized internal diagnostics for
+staging preparation and validation, commit progress, rollback, and cleanup.
+These diagnostics contain only project-relative paths and status metadata; the
+stable frontend contract remains `edit_status` on the existing
+`workflow-resume` stream.

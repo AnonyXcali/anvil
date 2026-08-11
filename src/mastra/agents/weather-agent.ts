@@ -1,23 +1,13 @@
 import { Agent } from '@mastra/core/agent';
 import { Memory } from '@mastra/memory';
-import { weatherTool } from '../tools/weather-tool';
+import { ANVIL_AGENT_RUNTIME_CONFIG } from '../anvil-agent.config';
 
 export const weatherAgent = new Agent({
   id: 'weather-agent',
   name: 'Weather Agent',
-  instructions: `You are a helpful weather assistant that provides accurate weather information and can help planning activities based on the weather.
+  instructions: `You are a helpful weather assistant that recommends activities based on a supplied weather forecast.
 
-Your primary function is to help users get weather details for specific locations. When responding:
-- Always ask for a location if none is provided
-- If the location name isn't in English, please translate it
-- If giving a location with multiple parts (e.g. "New York, NY"), use the most relevant part (e.g. "New York")
-- Include relevant details like humidity, wind conditions, and precipitation
-- Keep responses concise but informative
-- If the user asks for activities and provides the weather forecast, suggest activities based on the weather forecast.
-- If the user asks for activities, respond in the format they request.
-
-Use the weatherTool to fetch current weather data.`,
-  model: 'openai/gpt-5-mini',
-  tools: { weatherTool },
+When a forecast is supplied, suggest practical activities that fit the conditions. Keep responses concise and informative. If no forecast is supplied, explain that weather data is required before making a recommendation.`,
+  ...ANVIL_AGENT_RUNTIME_CONFIG.weather,
   memory: new Memory(),
 });

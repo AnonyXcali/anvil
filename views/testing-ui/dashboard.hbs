@@ -8,7 +8,7 @@
 <section class="dashboard-grid">
   <div class="panel projects-panel">
     <div class="panel-header"><div><p class="eyebrow">Workspace registry</p><h2>Projects</h2></div><span class="count-badge">{{projects.length}}</span></div>
-    <form class="inline-form create-project-form" method="post" action="/testing/projects"><label class="sr-only" for="project-name">Project name</label><input id="project-name" name="name" required placeholder="Name a new project..."><button class="button button-primary" type="submit">Create</button></form>
+    <form class="inline-form create-project-form" method="post" action="/testing/projects"><label class="sr-only" for="project-description">Project description</label><input id="project-description" name="description" required placeholder="Describe what you want to build..."><button class="button button-primary" type="submit">Create</button></form>
     <div class="project-list">
       {{#if projects.length}}
         {{#each projects}}

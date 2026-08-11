@@ -6,6 +6,10 @@ import {
   Z_SEARCH_TOOL_RESPONSE,
   Z_TOOL_REQUEST_SHAPE,
 } from 'src/anvil-agent/anvil-agent.types';
+import {
+  assertValidSearchToolRequest,
+  InvalidSearchToolRequestError,
+} from 'src/anvil-agent/anvil-agent-search.validation';
 
 export function createAnvilAgentSearchTool(
   anvilAgentSearchService: AnvilAgentSearchService,
@@ -34,6 +38,23 @@ async function fileSearch(
   context: ToolExecutionContext,
   requireHistory: boolean,
 ) {
+  try {
+    assertValidSearchToolRequest(inputData);
+  } catch (error) {
+    if (error instanceof InvalidSearchToolRequestError) {
+      anvilAgentSearchService.anvilAgentSearchToolLogger(
+        JSON.stringify({
+          code: error.code,
+          searchType: error.details.searchType,
+          field: error.details.field,
+          reason: error.details.reason,
+          filePath: error.details.filePath,
+        }),
+      );
+    }
+    throw error;
+  }
+
   if (requireHistory && context.requestContext?.get('historyRead') !== true) {
     throw new Error(
       'Read architecture/HISTORY.md before searching the project',
@@ -44,6 +65,12 @@ async function fileSearch(
     context.requestContext?.get('projectId');
 
   const count: number = context.requestContext?.get('callCount') as number;
+  const maxSearchCalls = context.requestContext?.get('maxSearchCalls');
+  if (typeof maxSearchCalls === 'number' && count >= maxSearchCalls) {
+    throw new Error(
+      `Search call limit reached: at most ${maxSearchCalls} repository search call is allowed for this run`,
+    );
+  }
   const updatedCount = count + 1;
   context.requestContext?.set('callCount', updatedCount);
 

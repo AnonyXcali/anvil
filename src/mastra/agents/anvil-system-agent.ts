@@ -1,13 +1,22 @@
 import { Agent } from '@mastra/core/agent';
 import { Memory } from '@mastra/memory';
+import { resolve } from 'node:path';
+import {
+  ANVIL_AGENT_RUNTIME_CONFIG,
+  ANVIL_SEARCH_MODE,
+} from '../anvil-agent.config';
 import { AnvilAgentSearchService } from 'src/anvil-agent/anvil-agent-search.service';
 import { createAnvilAgentSearchTool } from '../tools/anvil-agent-search-tool';
 import { createAnvilHistoryTools } from '../tools/anvil-history-tools';
 import { AnvilHistoryService } from 'src/anvil-history/anvil-history.service';
-import { ANVIL_SYSTEM_AGENT_PROMPT } from './anvil-system-agent.prompt';
+import {
+  ANVIL_SYSTEM_AGENT_PROMPT,
+  ANVIL_SYSTEM_AGENT_PROMPT_GREEDY,
+  ANVIL_SYSTEM_AGENT_PROMPT_NORMAL,
+  ANVIL_SEARCH_FINALIZER_PROMPT,
+} from './anvil-system-agent.prompt';
 
 //TODO: reduce and make the system prompt more consise. Current token usage exceeding 30000 tokens.
-//TODO: use skills instead
 // Currently the rules are specific to frontend, but we will introduce for backend structure as well.
 
 const MAX_CALLS = 10;
@@ -97,7 +106,19 @@ const INTRODUCTION = `
         action_tokens: FILE_MODIFICATION_TOKENS[]; //'import' | 'add' | 'delete' | 'replace' | 'replace_file'
         precise_instruction: string;
         code: string | null;
+        patch: string | null;
+        file_type: 'component' | 'stylesheet' | 'route' | 'layout' | 'config' | 'asset' | 'test' | 'service';
+        architectural_role: 'app-shell' | 'feature-page' | 'feature-component' | 'shared-primitive' | 'feature-style' | 'global-style' | 'route-registration' | 'configuration' | 'test';
+        operation: 'create' | 'edit' | 'delete';
+        depends_on: string[];
       }>;
+      structure_plan: {
+        feature_root: string;
+        phases: Array<{ id: 'structure' | 'shared' | 'feature' | 'integration' | 'validation'; file_paths: string[] }>;
+        directories_to_create: string[];
+        preserve: string[];
+        existing_paths: string[];
+      };
     } | null;
     error: {
       error_type: SEARCH_ERROR_TYPES;
@@ -870,10 +891,24 @@ const EXISTING_ANVIL_SYSTEM_AGENT_PROMPT = `
 const ANVIL_SYSTEM_AGENT_PROMPTS = {
   existing: EXISTING_ANVIL_SYSTEM_AGENT_PROMPT,
   alternate: ANVIL_SYSTEM_AGENT_PROMPT,
+  normal: ANVIL_SYSTEM_AGENT_PROMPT_NORMAL,
+  greedy: ANVIL_SYSTEM_AGENT_PROMPT_GREEDY,
 } as const;
 
-const ACTIVE_ANVIL_SYSTEM_AGENT_PROMPT = ANVIL_SYSTEM_AGENT_PROMPTS.alternate;
-// To test the alternate prompt, switch to ANVIL_SYSTEM_AGENT_PROMPTS.alternate.
+const ACTIVE_ANVIL_SYSTEM_AGENT_PROMPT =
+  ANVIL_SEARCH_MODE === 'greedy'
+    ? ANVIL_SYSTEM_AGENT_PROMPTS.greedy
+    : ANVIL_SYSTEM_AGENT_PROMPTS.alternate;
+
+// Filesystem skills provide reusable search and architecture guidance. The
+// active prompt and tool validation remain authoritative for execution rules.
+const ANVIL_SEARCH_SKILLS = [
+  resolve(process.cwd(), 'mastra-skills/search-tool-playbook'),
+  resolve(process.cwd(), 'mastra-skills/frontend-project-structure'),
+  resolve(process.cwd(), 'mastra-skills/architecture-history'),
+  resolve(process.cwd(), 'mastra-skills/css-tsx-analysis'),
+  resolve(process.cwd(), 'mastra-skills/structural-edit-planning'),
+];
 
 export function createAnvilAgent(deps: {
   anvilAgentSearchService: AnvilAgentSearchService;
@@ -884,7 +919,8 @@ export function createAnvilAgent(deps: {
     id: 'anvil-search-agent',
     name: 'Anvil Search Agent',
     instructions: ACTIVE_ANVIL_SYSTEM_AGENT_PROMPT,
-    model: 'openai/gpt-5.6-luna',
+    ...ANVIL_AGENT_RUNTIME_CONFIG.search,
+    skills: ANVIL_SEARCH_SKILLS,
     tools: {
       searchTool: createAnvilAgentSearchTool(deps.anvilAgentSearchService, {
         requireHistory: true,
@@ -905,4 +941,13 @@ export function createAnvilAgent(deps: {
   });
 
   return anvilSystemAgent;
+}
+
+export function createAnvilSearchFinalizerAgent() {
+  return new Agent({
+    id: 'anvil-search-finalizer-agent',
+    name: 'Anvil Search Finalizer Agent',
+    instructions: ANVIL_SEARCH_FINALIZER_PROMPT,
+    ...ANVIL_AGENT_RUNTIME_CONFIG.search,
+  });
 }

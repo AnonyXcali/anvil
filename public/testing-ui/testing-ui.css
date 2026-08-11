@@ -684,8 +684,7 @@ textarea {
     11px ui-monospace,
     monospace;
 }
-.chat-activity[hidden],
-.chat-actions[hidden] {
+.chat-activity[hidden] {
   display: none;
 }
 .chat-activity[data-kind='editing'] {
@@ -717,16 +716,6 @@ textarea {
     opacity: 1;
     transform: scale(1.15);
   }
-}
-.chat-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 10px;
-}
-.preview-link {
-  max-width: 100%;
-  white-space: nowrap;
 }
 .inspector-column {
   display: grid;

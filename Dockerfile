@@ -28,6 +28,7 @@ RUN pnpm install --prod --frozen-lockfile
 COPY --from=base /app/dist ./dist
 COPY --from=base /app/views ./views
 COPY --from=base /app/public ./public
+COPY --from=base /app/mastra-skills ./mastra-skills
 
 EXPOSE 3000
 

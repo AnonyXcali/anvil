@@ -109,8 +109,8 @@ export class TestingUiService {
     return this.coreService.talk(query, conversationId, projectId, userId);
   }
 
-  async createProject(name: string, userId: string) {
-    return this.projectService.insert(name, userId);
+  async createProject(description: string, userId: string) {
+    return this.projectService.insert(description, userId);
   }
 
   async startProject(projectId: string, userId: string) {
@@ -119,10 +119,6 @@ export class TestingUiService {
 
   async stopProject(projectId: string, userId: string) {
     return this.projectService.stop(projectId, userId);
-  }
-
-  async renameProject(projectId: string, name: string, userId: string) {
-    return this.projectService.update(projectId, { name }, userId);
   }
 
   async deleteProject(projectId: string, userId: string) {

@@ -13,6 +13,17 @@ const Z_EDIT_FILE_OUTPUT = z.object({
   error: z.string().nullable(),
 });
 
+const Z_APPLY_PATCH_OUTPUT = z.object({
+  success: z.boolean(),
+  localFilePath: z.string().nullable(),
+  attemptsUsed: z.number().int().nonnegative(),
+  attemptsRemaining: z.number().int().nonnegative(),
+  error: z.string().nullable(),
+});
+
+// One initial patch plus one regenerated patch after a conflict.
+const MAX_PATCH_ATTEMPTS = 2;
+
 const Z_READ_LOCAL_FILE_OUTPUT = z.object({
   content: z.string(),
   error: z.string().nullable(),
@@ -37,6 +48,15 @@ function getProjectFilePath(context: ToolExecutionContext): string {
 
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : 'Unknown verify tool error';
+}
+
+function getPatchAttempts(context: ToolExecutionContext): number {
+  const attempts = context.requestContext?.get('verifyPatchAttempts');
+  return typeof attempts === 'number' &&
+    Number.isInteger(attempts) &&
+    attempts >= 0
+    ? attempts
+    : 0;
 }
 
 export function createAnvilVerifyAgentTools(
@@ -141,6 +161,83 @@ export function createAnvilVerifyAgentTools(
             success: false,
             localFilePath: null,
             error: getErrorMessage(error),
+          };
+        }
+      },
+    }),
+    apply_patch: createTool({
+      id: 'apply_patch',
+      description:
+        'Apply one bounded, exact-context standard unified diff to the current local verification file. Use this for focused corrections; at most one regenerated retry is allowed after a conflict.',
+      inputSchema: z.object({
+        localFilePath: z.string().min(1),
+        patch: z.string().min(1),
+      }),
+      outputSchema: Z_APPLY_PATCH_OUTPUT,
+      execute: async (inputData, context) => {
+        const attemptsUsed = getPatchAttempts(context);
+
+        if (attemptsUsed >= MAX_PATCH_ATTEMPTS) {
+          return {
+            success: false,
+            localFilePath: null,
+            attemptsUsed,
+            attemptsRemaining: 0,
+            error: `Patch attempt limit reached (${MAX_PATCH_ATTEMPTS})`,
+          };
+        }
+
+        context.requestContext?.set('verifyPatchAttempts', attemptsUsed + 1);
+
+        try {
+          const allowedLocalFilePath = getAllowedLocalFilePath(context);
+          if (inputData.localFilePath !== allowedLocalFilePath) {
+            throw new Error(
+              'Verify patch tool can only edit the current local file',
+            );
+          }
+
+          const result = await anvilAgentEditService.applyUnifiedPatch(
+            inputData.localFilePath,
+            inputData.patch,
+            getProjectFilePath(context),
+          );
+          await appendHistoryBestEffort(anvilHistoryService, context, {
+            subject: 'Apply verification patch',
+            status: 'success',
+            changesMade: `Applied a focused unified diff (${result.hunksApplied} hunk(s)).`,
+            files: [getProjectFilePath(context)],
+            actor: 'anvil-verify-agent.apply_patch',
+          });
+
+          return {
+            success: true,
+            localFilePath: result.localFilePath,
+            attemptsUsed: attemptsUsed + 1,
+            attemptsRemaining: Math.max(
+              0,
+              MAX_PATCH_ATTEMPTS - attemptsUsed - 1,
+            ),
+            error: null,
+          };
+        } catch (error: unknown) {
+          const message = getErrorMessage(error);
+          await appendHistoryBestEffort(anvilHistoryService, context, {
+            subject: 'Apply verification patch',
+            status: 'failed',
+            changesMade: message,
+            files: [getProjectFilePath(context)],
+            actor: 'anvil-verify-agent.apply_patch',
+          });
+          return {
+            success: false,
+            localFilePath: null,
+            attemptsUsed: attemptsUsed + 1,
+            attemptsRemaining: Math.max(
+              0,
+              MAX_PATCH_ATTEMPTS - attemptsUsed - 1,
+            ),
+            error: message,
           };
         }
       },

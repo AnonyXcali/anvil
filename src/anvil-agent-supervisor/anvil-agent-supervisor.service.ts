@@ -3,7 +3,6 @@ import { Inject, Injectable, Logger } from '@nestjs/common';
 import { MastraService } from '@mastra/nestjs';
 import { Queue } from 'bullmq';
 import { Kysely } from 'kysely';
-import { ConversationService } from 'src/conversation/conversation.service';
 import type { DB, Json } from 'src/db/db.types';
 import { JobService } from 'src/job/job.service';
 import { KYSELY_DB } from 'src/tokens';
@@ -24,6 +23,19 @@ import { ANVIL_SUPERVISOR_AGENT_JOB_DATA } from './anvil-agent-supervisor.types'
 
 const FRONTEND_ENGINEERING_WORKFLOW_ID = 'anvil-agent-create-workflow';
 
+function isInternalApprovalPlanChunk(chunk: unknown): boolean {
+  if (!chunk || typeof chunk !== 'object') {
+    return false;
+  }
+
+  const serialized = JSON.stringify(chunk);
+  return (
+    serialized.includes('anvil-agent-workflow-plan-step') &&
+    (serialized.includes('workflow-step-output') ||
+      serialized.includes('workflow-step-result'))
+  );
+}
+
 @Injectable()
 export class AnvilAgentSupervisorService {
   private readonly logger = new Logger(AnvilAgentSupervisorService.name);
@@ -31,7 +43,6 @@ export class AnvilAgentSupervisorService {
   constructor(
     @InjectQueue('anvil-supervisor-agent-processor')
     private readonly anvilSupervisorAgentTaskQueueProcessor: Queue<ANVIL_SUPERVISOR_AGENT_JOB_DATA>,
-    private readonly conversationService: ConversationService,
     private readonly jobService: JobService,
     private readonly mastraService: MastraService,
     private readonly streamPublisher: AnvilAgentStreamPublisher,
@@ -44,6 +55,7 @@ export class AnvilAgentSupervisorService {
     conversationId: string,
     jobId: string,
     projectId: string,
+    streamId: string,
   ): Promise<void> {
     this.logger.log(
       `Supervisor agent requested for conversation ${conversationId}, job ${jobId}, project ${projectId}, messages ${messages.length}`,
@@ -56,15 +68,15 @@ export class AnvilAgentSupervisorService {
     const agent = this.mastraService.getAgent(
       AGENT_DIRECTORY.anvilSupervisorAgent,
     );
+    const abortController = new AbortController();
     const resultStream = await agent.stream(
       messages as unknown as MessageListInput,
       {
         maxSteps: 10,
         requestContext,
+        abortSignal: abortController.signal,
       },
     );
-    const streamId = `${jobId}:supervisor`;
-
     const publishChunk = async (chunk: unknown) => {
       await this.streamPublisher.publish({
         chunk,
@@ -75,15 +87,27 @@ export class AnvilAgentSupervisorService {
         streamId,
       });
     };
+    let workflowErrorPublished = false;
 
-    const publishAppEvent = async (chunk: unknown) => {
+    const publishAppEvent = async (chunk: unknown): Promise<boolean> => {
       const appEvent = buildAppStreamEvent(chunk);
 
       if (!appEvent) {
-        return;
+        return false;
+      }
+
+      if (
+        appEvent.type === StreamEventType.WORKFLOW_ERROR &&
+        workflowErrorPublished
+      ) {
+        return true;
+      }
+      if (appEvent.type === StreamEventType.WORKFLOW_ERROR) {
+        workflowErrorPublished = true;
       }
 
       await publishChunk(appEvent);
+      return appEvent.type === StreamEventType.WORKFLOW_ERROR;
     };
 
     const publishApprovalRequired = async ({
@@ -109,19 +133,27 @@ export class AnvilAgentSupervisorService {
     };
 
     for await (const chunk of resultStream.fullStream) {
-      await publishChunk(chunk);
-      await publishAppEvent(chunk);
+      const approvalSuspendPayload = getApprovalSuspendPayload(chunk);
+      if (!approvalSuspendPayload && !isInternalApprovalPlanChunk(chunk)) {
+        await publishChunk(chunk);
+      }
+      const isTerminalWorkflowError = await publishAppEvent(chunk);
+      if (isTerminalWorkflowError) {
+        abortController.abort(new Error('Nested workflow failed'));
+        break;
+      }
 
       const chunkType = getStreamChunkType(chunk);
       const { workflowId, runId } = getWorkflowIdentifiers(chunk);
-      const approvalSuspendPayload = getApprovalSuspendPayload(chunk);
 
       if (approvalSuspendPayload) {
-        const suspendedRunId = getSuspendedToolRunIdFromMessages(
-          resultStream.messageList.get.response.db(),
-          approvalSuspendPayload.toolCallId,
-          approvalSuspendPayload.toolName,
-        );
+        const suspendedRunId =
+          approvalSuspendPayload.runId ??
+          getSuspendedToolRunIdFromMessages(
+            resultStream.messageList.get.response.db(),
+            approvalSuspendPayload.toolCallId,
+            approvalSuspendPayload.toolName,
+          );
 
         if (!suspendedRunId) {
           throw new Error(
@@ -129,18 +161,20 @@ export class AnvilAgentSupervisorService {
           );
         }
 
-        const snapshot = await this.loadWorkflowSnapshot(
-          FRONTEND_ENGINEERING_WORKFLOW_ID,
-          suspendedRunId,
-        );
         const approvalId = await this.upsertWorkflowRun({
           workflowId: FRONTEND_ENGINEERING_WORKFLOW_ID,
           runId: suspendedRunId,
           conversationId,
           projectId,
           status: 'suspended',
-          suspendedStep: snapshot ?? (approvalSuspendPayload.raw as Json),
+          suspendedStep: approvalSuspendPayload.raw as Json,
+          resumeAgentId: AGENT_DIRECTORY.anvilSupervisorAgent,
+          resumeToolCallId: approvalSuspendPayload.toolCallId,
+          resumeToolName: approvalSuspendPayload.toolName,
         });
+        this.logger.log(
+          `Application approval record saved for ${FRONTEND_ENGINEERING_WORKFLOW_ID} run ${suspendedRunId}; approval ${approvalId} targets ${AGENT_DIRECTORY.anvilSupervisorAgent}`,
+        );
 
         await publishApprovalRequired({
           approvalId,
@@ -164,6 +198,9 @@ export class AnvilAgentSupervisorService {
           projectId,
           status: 'running',
           suspendedStep: null,
+          resumeAgentId: null,
+          resumeToolCallId: null,
+          resumeToolName: null,
         });
         continue;
       }
@@ -178,6 +215,9 @@ export class AnvilAgentSupervisorService {
           status: 'suspended',
           suspendedStep: snapshot,
         });
+        this.logger.log(
+          `Application approval record saved for ${workflowId} run ${runId}; approval ${approvalId} is suspended`,
+        );
 
         await publishApprovalRequired({
           approvalId,
@@ -200,6 +240,16 @@ export class AnvilAgentSupervisorService {
       runId,
     });
 
+    if (snapshot) {
+      this.logger.debug(
+        `Workflow snapshot loaded for ${workflowId} run ${runId}`,
+      );
+    } else {
+      this.logger.warn(
+        `Workflow snapshot missing for ${workflowId} run ${runId}`,
+      );
+    }
+
     return (snapshot ?? null) as Json | null;
   }
 
@@ -210,6 +260,9 @@ export class AnvilAgentSupervisorService {
     projectId,
     status,
     suspendedStep,
+    resumeAgentId,
+    resumeToolCallId,
+    resumeToolName,
   }: {
     workflowId: string;
     runId: string;
@@ -217,6 +270,9 @@ export class AnvilAgentSupervisorService {
     projectId: string;
     status: 'running' | 'suspended';
     suspendedStep: Json | null;
+    resumeAgentId?: string | null;
+    resumeToolCallId?: string | null;
+    resumeToolName?: string | null;
   }): Promise<string> {
     const workflowRun = await this.db
       .insertInto('preview_platform.workflow_run')
@@ -227,11 +283,17 @@ export class AnvilAgentSupervisorService {
         project_id: projectId,
         status,
         suspended_step: suspendedStep,
+        resume_agent_id: resumeAgentId ?? null,
+        resume_tool_call_id: resumeToolCallId ?? null,
+        resume_tool_name: resumeToolName ?? null,
       })
       .onConflict((oc) =>
         oc.column('run_id').doUpdateSet({
           status,
           suspended_step: suspendedStep,
+          resume_agent_id: resumeAgentId ?? null,
+          resume_tool_call_id: resumeToolCallId ?? null,
+          resume_tool_name: resumeToolName ?? null,
         }),
       )
       .returning('id')
@@ -240,16 +302,64 @@ export class AnvilAgentSupervisorService {
     return workflowRun.id;
   }
 
+  async resumeSupervisorAgent({
+    runId,
+    approved,
+    toolCallId,
+  }: {
+    runId: string;
+    approved: boolean;
+    toolCallId?: string | null;
+  }) {
+    const supervisorAgent = this.mastraService.getAgent(
+      AGENT_DIRECTORY.anvilSupervisorAgent,
+    );
+    const { runs } = await supervisorAgent.listSuspendedRuns();
+    const suspendedRun = runs.find((run) => run.runId === runId);
+
+    if (!suspendedRun) {
+      throw new Error(
+        `Suspended supervisor agent run ${runId} was not found or is no longer suspended`,
+      );
+    }
+
+    const suspendedTool = suspendedRun.toolCalls.find(
+      (toolCall) => !toolCallId || toolCall.toolCallId === toolCallId,
+    );
+
+    if (!suspendedTool) {
+      throw new Error(
+        `Suspended supervisor agent run ${runId} does not contain the expected tool call ${toolCallId ?? '(unspecified)'}`,
+      );
+    }
+
+    if (suspendedTool.requiresApproval) {
+      throw new Error(
+        `Suspended supervisor agent run ${runId} requires tool approval; resumeStream is only valid for a tool suspension`,
+      );
+    }
+
+    this.logger.log(
+      `Resuming supervisor agent ${AGENT_DIRECTORY.anvilSupervisorAgent} run ${runId}`,
+    );
+    return supervisorAgent.resumeStream({ approved }, { runId });
+  }
+
   /*TODO this should queue the job to anvilSupervisorAgentQueue */
   async anvilSupervisorAgentQueue(
     conversationId: string,
     query: string,
     projectId: string,
+    streamId: string,
   ): Promise<void> {
     this.logger.log('Queueing offload query to supervisor agent worker');
 
     const messages = (
-      await this.conversationService.retrieveMessages(conversationId)
+      await this.db
+        .selectFrom('preview_platform.message')
+        .select(['role', 'message'])
+        .where('conversation_id', '=', conversationId)
+        .execute()
     ).map((item) => ({ role: item.role, content: item.message }));
 
     const job = await this.anvilSupervisorAgentTaskQueueProcessor.add(
@@ -259,6 +369,7 @@ export class AnvilAgentSupervisorService {
         query,
         messages,
         project_id: projectId,
+        stream_id: streamId,
       },
       {
         attempts: 1,

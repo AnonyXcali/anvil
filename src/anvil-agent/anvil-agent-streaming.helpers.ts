@@ -103,9 +103,79 @@ const WORKFLOW_STEP_STATUS_MESSAGES: Record<string, StatusMessages> = {
     completed: 'Cleaned up temporary files.',
     failed: 'Cleanup failed.',
   },
+  'anvil-edit-agent-coordinated-upload-files-step': {
+    started: 'Uploading the verified project changes.',
+    completed: 'Uploaded the verified project changes.',
+    failed: 'Coordinated upload failed.',
+  },
+  'anvil-edit-agent-coordinated-cleanup-files-step': {
+    started: 'Cleaning up staged project files.',
+    completed: 'Cleaned up staged project files.',
+    failed: 'Staged project cleanup failed.',
+  },
+  'anvil-agent-structure-create-directories-step': {
+    started: 'Preparing the project structure.',
+    completed: 'Prepared the project structure.',
+    failed: 'Failed to prepare the project structure.',
+  },
+  'anvil-edit-agent-staging-prepare-all-files-step': {
+    started: 'Preparing all files locally.',
+    completed: 'Prepared all files locally.',
+    failed: 'Failed to prepare files locally.',
+  },
+  'anvil-agent-staged-create-file-branch-step': {
+    started: 'Preparing a new file locally.',
+    completed: 'Prepared the new file locally.',
+    failed: 'New-file preparation failed.',
+  },
+  'anvil-agent-staged-existing-file-branch-step': {
+    started: 'Preparing the existing file edit.',
+    completed: 'Prepared the existing file edit.',
+    failed: 'Existing-file preparation failed.',
+  },
+  'anvil-agent-staged-branch-input-file-step': {
+    started: 'Preparing the staged file operation.',
+    completed: 'Prepared the staged file operation.',
+    failed: 'Staged file preparation failed.',
+  },
+  'anvil-edit-agent-staged-create-file-branch-step': {
+    started: 'Preparing a new file locally.',
+    completed: 'Prepared the new file locally.',
+    failed: 'New-file preparation failed.',
+  },
+  'anvil-edit-agent-staged-existing-file-branch-step': {
+    started: 'Preparing the existing file edit.',
+    completed: 'Prepared the existing file edit.',
+    failed: 'Existing-file preparation failed.',
+  },
+  'anvil-edit-agent-staged-branch-input-file-step': {
+    started: 'Preparing the staged file operation.',
+    completed: 'Prepared the staged file operation.',
+    failed: 'Staged file preparation failed.',
+  },
+  'anvil-edit-agent-staging-validate-project-step': {
+    started: 'Validating the staged project.',
+    completed: 'Validated the staged project.',
+    failed: 'Staged project validation failed.',
+  },
+  'anvil-edit-agent-staging-commit-files-step': {
+    started: 'Committing the verified project changes.',
+    completed: 'Committed the verified project changes.',
+    failed: 'Project commit failed.',
+  },
+  'anvil-edit-agent-staging-cleanup-transaction-step': {
+    started: 'Cleaning up the staged transaction.',
+    completed: 'Cleaned up the staged transaction.',
+    failed: 'Staged transaction cleanup failed.',
+  },
 };
 
 const TOOL_STATUS_MESSAGES: Record<string, StatusMessages> = {
+  apply_patch: {
+    started: 'Applying a focused verification patch.',
+    completed: 'Applied the focused verification patch.',
+    failed: 'Focused verification patch failed.',
+  },
   replace_file: {
     started: 'Replacing the complete local file.',
     completed: 'Replaced the complete local file.',
@@ -237,6 +307,29 @@ export function getApprovalSuspendPayload(
       runId: getStringValue(chunk, 'runId'),
     },
   };
+}
+
+/** Keeps approval copy business-facing even when model output is over-specific. */
+export function sanitizeApprovalSummary(summary: string): string {
+  const safeLines = summary
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .filter((line) => !line.startsWith('```'))
+    .filter((line) => !/^[-+]{3}\s/.test(line))
+    .filter(
+      (line) =>
+        !/\b(file_path|depends_on|structure_plan|patch|implementation details?)\b/i.test(
+          line,
+        ),
+    )
+    .filter((line) => !/\b(?:src|app|components|pages)\/[^\s]+/i.test(line))
+    .filter((line) => !/\.(?:tsx?|jsx?|css|scss|json)\b/i.test(line));
+
+  const sanitized = safeLines.join(' ').trim();
+  return (
+    sanitized || 'The requested application improvements are ready for review.'
+  );
 }
 
 /** Finds the nested workflow run ID associated with an approval suspension. */
@@ -455,7 +548,7 @@ export function buildAppStreamEvent(chunk: unknown): AppStreamEvent | null {
     chunkType === 'abort'
   ) {
     return {
-      type: StreamEventType.ERROR,
+      type: StreamEventType.WORKFLOW_ERROR,
       payload: {
         status: 'failed',
         message: 'The workflow was interrupted.',
@@ -468,7 +561,7 @@ export function buildAppStreamEvent(chunk: unknown): AppStreamEvent | null {
     const failed = getStringValue(payload, 'workflowStatus') === 'failed';
 
     return {
-      type: failed ? StreamEventType.ERROR : StreamEventType.COMPLETED,
+      type: failed ? StreamEventType.WORKFLOW_ERROR : StreamEventType.COMPLETED,
       payload: {
         status: failed ? 'failed' : 'completed',
         message: failed ? 'Something went wrong.' : 'Workflow completed.',
@@ -484,6 +577,16 @@ export function buildAppStreamEvent(chunk: unknown): AppStreamEvent | null {
   ) {
     const failed = getStringValue(payload, 'status') === 'failed';
     const completed = chunkType !== 'workflow-step-start' && !failed;
+    if (failed) {
+      return {
+        type: StreamEventType.WORKFLOW_ERROR,
+        payload: {
+          status: 'failed',
+          message: 'Something went wrong.',
+          step: stepId,
+        },
+      };
+    }
     const eventType = stepId?.includes('search')
       ? StreamEventType.SEARCH_STATUS
       : stepId?.includes('verify')
@@ -492,7 +595,9 @@ export function buildAppStreamEvent(chunk: unknown): AppStreamEvent | null {
             stepId?.includes('download') ||
             stepId?.includes('backup') ||
             stepId?.includes('upload') ||
-            stepId?.includes('delete-temp')
+            stepId?.includes('delete-temp') ||
+            stepId?.includes('staging') ||
+            stepId?.includes('structure-create-directories')
           ? StreamEventType.EDIT_STATUS
           : StreamEventType.WORKFLOW_STATUS;
     const status: AppStreamEventStatus = failed
@@ -548,11 +653,14 @@ export function buildAppStreamEvent(chunk: unknown): AppStreamEvent | null {
     };
   }
 
-  if (
-    chunkType === 'tool-error' ||
-    chunkType === 'error' ||
-    chunkType === 'tripwire'
-  ) {
+  if (chunkType === 'error') {
+    return {
+      type: StreamEventType.WORKFLOW_ERROR,
+      payload: { status: 'failed', message: 'Something went wrong.' },
+    };
+  }
+
+  if (chunkType === 'tool-error' || chunkType === 'tripwire') {
     return {
       type: StreamEventType.ERROR,
       payload: { status: 'failed', message: 'Something went wrong.' },

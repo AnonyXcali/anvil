@@ -33,6 +33,7 @@ export class AnvilSupervisorAgentProcessor extends WorkerHost {
         conversation_id: conversationId,
         messages,
         project_id: projectId,
+        stream_id: streamId,
       } = {},
     } = job || {};
 
@@ -52,11 +53,16 @@ export class AnvilSupervisorAgentProcessor extends WorkerHost {
       throw new Error('no project id');
     }
 
+    if (!streamId) {
+      throw new Error('no stream id');
+    }
+
     await this.anvilAgentSupervisorService.askSupervisorAgent(
       messages,
       conversationId,
       String(id),
       projectId,
+      streamId,
     );
 
     await job.updateProgress(100);

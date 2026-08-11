@@ -3,6 +3,7 @@ import {
   ERROR,
   Z_ERROR_SHAPE,
   Z_FINAL_SHAPE_RESPONSE,
+  STRUCTURE_PLAN,
 } from 'src/anvil-agent/anvil-agent.types';
 import {
   EDIT_AGENT_INPUT,
@@ -15,11 +16,13 @@ export type ANVIL_SUPERVISOR_AGENT_JOB_DATA = {
   query: string;
   messages: Array<Record<string, string>>;
   project_id: string;
+  stream_id: string;
 };
 
 type SEARCH_OUTPUT_PLAN_INPUT = {
   result: Array<FINAL_RESPONSE_SHAPE>;
   error: ERROR;
+  structure_plan: STRUCTURE_PLAN;
 };
 
 //STEP 1: Search
@@ -40,6 +43,7 @@ type AnvilAgentSupervisorWorkflowOutputSchema = {
 
 type AnvilAgentSupervisorWorkflowPlanStepOutputSchema = {
   files: Array<FINAL_RESPONSE_SHAPE>;
+  structure_plan: STRUCTURE_PLAN;
 };
 
 type AnvilAgentSupervisorWorkflowPlanApprovalResumeInputSchema = {
@@ -73,12 +77,64 @@ const SearchStepOutput: z.ZodType<AnvilAgentSupervisorWorkflowSearchStepOutputSc
     response: z.object({
       result: z.array(Z_FINAL_SHAPE_RESPONSE),
       error: Z_ERROR_SHAPE,
+      structure_plan: z
+        .object({
+          feature_root: z.string(),
+          phases: z.array(
+            z.object({
+              id: z.enum([
+                'structure',
+                'shared',
+                'feature',
+                'integration',
+                'validation',
+              ]),
+              file_paths: z.array(z.string()),
+            }),
+          ),
+          directories_to_create: z.array(z.string()),
+          preserve: z.array(z.string()),
+          existing_paths: z.array(z.string()).default([]),
+        })
+        .default({
+          feature_root: 'src',
+          phases: [],
+          directories_to_create: [],
+          preserve: [],
+          existing_paths: [],
+        }),
     }),
   });
 
 const PlanStepOutput: z.ZodType<AnvilAgentSupervisorWorkflowPlanStepOutputSchema> =
   z.object({
     files: z.array(Z_FINAL_SHAPE_RESPONSE),
+    structure_plan: z
+      .object({
+        feature_root: z.string(),
+        phases: z.array(
+          z.object({
+            id: z.enum([
+              'structure',
+              'shared',
+              'feature',
+              'integration',
+              'validation',
+            ]),
+            file_paths: z.array(z.string()),
+          }),
+        ),
+        directories_to_create: z.array(z.string()),
+        preserve: z.array(z.string()),
+        existing_paths: z.array(z.string()).default([]),
+      })
+      .default({
+        feature_root: 'src',
+        phases: [],
+        directories_to_create: [],
+        preserve: [],
+        existing_paths: [],
+      }),
   });
 
 const PlanApprovalResumeInput: z.ZodType<AnvilAgentSupervisorWorkflowPlanApprovalResumeInputSchema> =

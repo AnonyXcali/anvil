@@ -1,6 +1,6 @@
 import { Agent } from '@mastra/core/agent';
 import { Memory } from '@mastra/memory';
-import { weatherTool } from '../tools/weather-tool';
+import { ANVIL_AGENT_RUNTIME_CONFIG } from '../anvil-agent.config';
 
 export const anvilPlanningAgent = new Agent({
   id: 'anvil-planning-agent',
@@ -46,7 +46,6 @@ export const anvilPlanningAgent = new Agent({
     - It can be multi-line.
     - It has to be strictly non-technical.
   `,
-  model: 'openai/gpt-5-mini',
-  tools: { weatherTool },
+  ...ANVIL_AGENT_RUNTIME_CONFIG.planning,
   memory: new Memory(),
 });

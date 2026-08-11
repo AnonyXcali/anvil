@@ -41,7 +41,9 @@ At a high level, the system includes:
 - Background job processing for long-running tasks.
 - Redis-backed streaming for conversation text, workflow progress, approvals, and job updates.
 - Postgres persistence for users, projects, conversations, messages, jobs, and generated files.
+- PostgreSQL-backed Mastra memory and workflow snapshots so suspended work can survive API restarts.
 - Mastra-based agents for conversation, source search, planning, editing, verification, and approvals.
+- Bundled Mastra skills for search, project structure, architecture history, CSS/TSX analysis, and structural edit planning.
 - Optional context from public web sources and the rendered project preview.
 - SSH-backed Docker preview infrastructure for generated React apps.
 - React preview generation, project editing, and preview lifecycle control.
@@ -51,7 +53,9 @@ At a high level, the system includes:
 An authenticated user starts from a project conversation. An internal intent step routes the request into one of two experiences:
 
 - Instant conversation: the conversation agent responds in short, plain language while text is delivered live to the UI. It can use project context, public web information, or the current preview when relevant.
-- Project change: the supervisor searches the project, presents a plan, waits for approval, then applies and verifies the approved changes before updating the preview.
+- Project change: the supervisor gathers project context, creates a structural plan, presents a business-facing summary, waits for approval, then stages, validates, and verifies the approved changes before updating the preview.
+
+For larger changes, related files are prepared in a backend staging workspace before any remote update. Existing files can use targeted edits, patches, or complete replacements; new files are created locally first. The system validates the staged result, commits files in a predictable order, and uses backups for recovery when a remote update fails.
 
 The testing UI makes both paths observable. It shows the composed response, live workflow status, approval controls, completion or failure state, and the underlying stream events for debugging.
 
@@ -69,6 +73,7 @@ The testing UI makes both paths observable. It shows the composed response, live
 - node-pg-migrate
 - Zod
 - Docker and SSH-backed preview infrastructure
+- SFTP-backed remote workspace operations
 - Jest
 - ESLint
 - Prettier
@@ -80,6 +85,8 @@ Future work should stay aligned with the committed repository direction:
 
 - Continue improving the quality and efficiency of the current conversation and project-change flows.
 - Expand verification and preview-aware feedback for generated applications.
+- Evolve project changes toward smaller milestones and approval-gated repair loops for fixable issues.
+- Track unresolved project issues in an architecture-level `BUGS.md` workflow and clear entries as they are resolved.
 - Improve preview isolation, authenticated preview URLs, and production-safe routing.
 - Improve project job tracking and frontend polling around long-running work.
 - Grow specialized tools for planning, editing, testing, building, and deploying generated apps.
@@ -112,6 +119,34 @@ type DevelopmentLogEntry = {
 };
 
 const developmentLogEntries: DevelopmentLogEntry[] = [
+  {
+    id: 'backend-owned-edit-runtime-state',
+    title: 'Separated edit instructions from runtime state',
+    timestamp: '11 August 2026, 19:00',
+    description:
+      'Tightened the editing contract so agents return file instructions while the backend owns verification, hashes, backups, staging, upload, rollback, and cleanup state.',
+  },
+  {
+    id: 'staged-new-file-branch',
+    title: 'Added a staged path for new files',
+    timestamp: '11 August 2026, 18:30',
+    description:
+      'New files are now created in the local staging workspace and verified before their remote directories and files are created during commit.',
+  },
+  {
+    id: 'two-phase-search-planning',
+    title: 'Separated repository search from structural planning',
+    timestamp: '11 August 2026, 17:45',
+    description:
+      'Split search evidence collection from final structural-plan generation so repository tools and compact planning output remain independently validated.',
+  },
+  {
+    id: 'durable-mastra-workflow-state',
+    title: 'Moved Mastra state to PostgreSQL',
+    timestamp: '10 August 2026, 22:30',
+    description:
+      'Persisted Mastra agent memory and suspended workflow snapshots in the dedicated PostgreSQL storage schema so workflow state is not tied to the API container filesystem.',
+  },
   {
     id: 'chunk-based-conversation-delivery',
     title: 'Added request-scoped conversation streaming',

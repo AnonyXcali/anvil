@@ -3,6 +3,7 @@ import { Memory } from '@mastra/memory';
 import { AnvilAgentEditService } from 'src/anvil-agent-edit/anvil-agent-edit.service';
 import { createAnvilVerifyAgentTools } from '../tools/anvil-verify-agent-tools';
 import { AnvilHistoryService } from 'src/anvil-history/anvil-history.service';
+import { ANVIL_AGENT_RUNTIME_CONFIG } from '../anvil-agent.config';
 
 type AnvilVerifyAgentContext = {
   localFilePath: string;
@@ -30,8 +31,9 @@ export function createAnvilVerifyAgent(deps: {
 
       TOOLS
       1) edit_file
-      2) replace_file
-      3) read_local_file
+      2) apply_patch
+      3) replace_file
+      4) read_local_file
 
       INSTRUCTIONS:
 
@@ -48,13 +50,14 @@ export function createAnvilVerifyAgent(deps: {
       Do not touch remote files.
       Do not call tools if the current local file already satisfies the precise_instruction.
       For a CSS instruction that requires a complete stylesheet rewrite, use replace_file with the exact complete file content.
+      For a focused correction, prefer apply_patch. Its patch must be a standard single-file unified diff with --- a/<project-relative-path>, +++ b/<project-relative-path>, and exact @@ -oldStart,oldCount +newStart,newCount @@ hunks. Use exact current-file context, include only the smallest relevant hunk, and do not include prose outside the diff. The tool allows one initial attempt plus one regenerated retry after a conflict; reread the file before regenerating and stop if the retry also fails.
 
       Each edit goes through a strict rubric scorer, and if the criteria is unmet a feedback would be provided on the file content that is provided to you,
       and how it can be fixed. In that use the edit_file tool to fix the issues described:
 
       Instructions -
       - understand the feedback thoroughly.
-      - call edit_file
+      - call apply_patch for a focused correction, or replace_file for a complete-file correction
 
       tool call request shape-
 
@@ -119,7 +122,7 @@ export function createAnvilVerifyAgent(deps: {
       - Strictly fail if read_local_file has error stated (meaning its not null) or content is null, which is invalid state.
       `;
     },
-    model: 'openai/gpt-5.6-luna',
+    ...ANVIL_AGENT_RUNTIME_CONFIG.verify,
     tools: createAnvilVerifyAgentTools(
       deps.anvilAgentEditService,
       deps.anvilHistoryService,

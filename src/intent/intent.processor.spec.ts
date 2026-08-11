@@ -95,7 +95,28 @@ describe('IntentProcessor', () => {
       'conversation-1',
       "What is today's date?",
       'project-1',
+      'stream-1',
     );
+  });
+
+  it('publishes task preparation before routing an offload intent', async () => {
+    const { processor, publish } = createProcessor({ intent: 'offload' });
+
+    await processor.process(createJob());
+
+    expect(publish).toHaveBeenCalledWith({
+      chunk: {
+        type: 'task_preparation',
+        payload: {
+          status: 'running',
+          message: 'Preparing summary of task...',
+        },
+      },
+      conversationId: 'conversation-1',
+      jobId: '42:intent',
+      source: 'intent',
+      streamId: 'stream-1',
+    });
   });
 
   it('publishes a text fallback before failing an invalid intent', async () => {

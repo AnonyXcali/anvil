@@ -11,3 +11,17 @@ Instant conversation streams have a 30-second execution timeout. The conversatio
 Intent classification failures publish a user-visible fallback `text-delta` on the conversation channel before the intent processor rethrows the classification error. The rethrow preserves BullMQ failure state and invokes the intent job failure handler, while the persisted stream chunk gives the user feedback without introducing a separate SSE event type. If fallback publication fails, the processor logs the publication error and still preserves the original classification failure.
 
 Any new recovery behavior must document persistence guarantees, retry ownership, duplicate-operation handling, and user-visible status transitions.
+
+The multi-file edit workflow persists its manifest before each remote backup,
+directory creation, and file mutation. The manifest is retained when rollback
+or cleanup fails, allowing the edit service to discover stale transactions at
+startup and attempt compensating restore/delete operations. Recovery is
+best-effort and idempotent at the file level: existing-file edits/deletes are
+restored from the transaction backup, newly created files are removed, and
+created directories are removed only when empty. A later recovery failure
+retains the manifest and backup artifacts for another operator/worker attempt;
+it never replaces the original edit failure. Startup recovery logs its outcome
+through the owning service; it does not publish a historical workflow-resume
+event after the worker has stopped. Normal in-run diagnostics continue through
+the existing workflow-resume/edit_status contract without exposing local paths
+or patch contents.
