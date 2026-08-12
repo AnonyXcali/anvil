@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, symlink, writeFile } from 'fs/promises';
+import { mkdtemp, readFile, rm, symlink, utimes, writeFile } from 'fs/promises';
 import { join } from 'path';
 import {
   AnvilEditStagingService,
@@ -114,6 +114,66 @@ describe('AnvilEditStagingService', () => {
         code: 'ENOENT',
       },
     );
+  });
+
+  it('discovers a preserved manifest that can be reopened after a restart', async () => {
+    await service.writeFile(
+      workspace,
+      'src/features/flowers/Flowers.tsx',
+      'export const Flowers = () => null;',
+    );
+    await service.writeManifest(workspace, {
+      projectId: workspace.projectId,
+      editRunId: workspace.editRunId,
+      stagingRoot: workspace.rootPath,
+      files: [
+        {
+          projectPath: 'src/features/flowers/Flowers.tsx',
+          localPath: join(
+            workspace.rootPath,
+            'src/features/flowers/Flowers.tsx',
+          ),
+          operation: 'create',
+          existedRemotely: false,
+          originalHash: null,
+          backupPath: null,
+          instructionIndexes: [],
+          applied: true,
+          verified: false,
+          validationStatus: 'repair_pending',
+          commitStatus: 'pending',
+          milestoneId: 'feature',
+        },
+      ],
+      directoriesToCreate: ['src/features/flowers'],
+      createdDirectories: [],
+      milestones: [
+        {
+          id: 'feature',
+          sequence: 0,
+          filePaths: ['src/features/flowers/Flowers.tsx'],
+          dependsOn: [],
+          status: 'repair_pending',
+          validationStatus: 'repair_pending',
+          commitStatus: 'not-committed',
+        },
+      ],
+      totalBytes: workspace.totalBytes,
+    });
+    await utimes(workspace.rootPath, new Date(0), new Date(0));
+
+    const [abandoned] = await service.findAbandonedWorkspaces(-1);
+    expect(abandoned?.manifest.milestones[0]?.status).toBe('repair_pending');
+    expect(abandoned?.manifest.files[0]?.milestoneId).toBe('feature');
+
+    const reopened = await service.openWorkspace(
+      workspace.projectId,
+      workspace.editRunId,
+      workspace.rootPath,
+    );
+    await expect(
+      service.readFile(reopened, 'src/features/flowers/Flowers.tsx'),
+    ).resolves.toEqual(Buffer.from('export const Flowers = () => null;'));
   });
 
   it(`defines the agreed hard file limit of ${MAX_STAGED_FILE_COUNT}`, () => {

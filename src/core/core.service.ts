@@ -21,11 +21,13 @@ import {
   buildAppStreamEvent,
   getApprovalSuspendPayload,
   getStreamChunkType,
+  getTranscriptMessage,
 } from 'src/anvil-agent/anvil-agent-streaming.helpers';
 import { AnvilAgentStreamPublisher } from 'src/anvil-agent/anvil-agent-stream-publisher.service';
 import { AnvilAgentSupervisorService } from 'src/anvil-agent-supervisor/anvil-agent-supervisor.service';
 import { AGENT_DIRECTORY } from 'src/agent.directory';
 import type { Json } from 'src/db/db.types';
+import { ConversationTranscriptService } from 'src/conversation/conversation-transcript.service';
 
 /**
  * One gotcha: if you're behind Azure Container Apps or any reverse proxy/load balancer
@@ -49,6 +51,7 @@ export class CoreService {
     private readonly mastraService: MastraService,
     private readonly streamPublisher: AnvilAgentStreamPublisher,
     private readonly anvilAgentSupervisorService: AnvilAgentSupervisorService,
+    private readonly transcriptService: ConversationTranscriptService,
   ) {}
 
   async handleFlowInitiation(query: string, userId: string, projectId: string) {
@@ -189,6 +192,7 @@ export class CoreService {
         'preview_platform.workflow_run.resume_agent_id',
         'preview_platform.workflow_run.resume_tool_call_id',
         'preview_platform.workflow_run.resume_tool_name',
+        'preview_platform.workflow_run.suspended_step',
       ])
       .where('preview_platform.workflow_run.id', '=', approvalRequestId)
       .where('preview_platform.project.user_id', '=', userId)
@@ -221,11 +225,50 @@ export class CoreService {
       throw new ConflictException('Workflow run is no longer suspended');
     }
 
+    if (workflowRun.workflow_id === 'anvil-agent-repair-workflow') {
+      const suspendedStep = workflowRun.suspended_step;
+      const transactionId =
+        suspendedStep &&
+        typeof suspendedStep === 'object' &&
+        'transactionId' in suspendedStep &&
+        typeof suspendedStep.transactionId === 'string'
+          ? suspendedStep.transactionId
+          : undefined;
+      if (!transactionId) {
+        await this.db
+          .updateTable('preview_platform.workflow_run')
+          .set({ status: 'failed' })
+          .where('id', '=', workflowRun.id)
+          .execute();
+        throw new ConflictException('Repair approval has no transaction');
+      }
+      if (decision === 'deny') {
+        await this.db
+          .updateTable('preview_platform.edit_transaction')
+          .set({ status: 'failed' })
+          .where('id', '=', transactionId)
+          .execute();
+        await this.db
+          .updateTable('preview_platform.workflow_run')
+          .set({ status: 'cancelled' })
+          .where('id', '=', workflowRun.id)
+          .execute();
+        return { success: true };
+      }
+      void this.startRepairSupervisorRun({
+        transactionId,
+        approvalRequestId: workflowRun.id,
+        conversationId: workflowRun.conversation_id,
+      });
+      return { success: true };
+    }
+
     void this.resumeWorkflowRunAndRelay({
       approvalRequestId: workflowRun.id,
       workflowId: workflowRun.workflow_id,
       runId: workflowRun.run_id,
       conversationId: workflowRun.conversation_id,
+      projectId: workflowRun.project_id,
       approved: decision === 'accept',
       resumeAgentId: workflowRun.resume_agent_id,
       resumeToolCallId: workflowRun.resume_tool_call_id,
@@ -245,11 +288,70 @@ export class CoreService {
       .execute();
   }
 
+  private async startRepairSupervisorRun(input: {
+    transactionId: string;
+    approvalRequestId: string;
+    conversationId: string;
+  }): Promise<void> {
+    try {
+      await this.streamPublisher.publish({
+        chunk: {
+          type: 'workflow-resume-start',
+          payload: {
+            workflowId: 'anvil-agent-repair-workflow',
+            runId: `repair:${input.transactionId}`,
+            approved: true,
+          },
+        },
+        conversationId: input.conversationId,
+        jobId: `${input.approvalRequestId}:workflow-resume`,
+        source: 'workflow-resume',
+        approvalRequestId: input.approvalRequestId,
+        streamId: `${input.approvalRequestId}:workflow-resume`,
+      });
+      await this.anvilAgentSupervisorService.queueRepairSupervisorAgent(
+        input.transactionId,
+        input.approvalRequestId,
+      );
+      await this.db
+        .updateTable('preview_platform.workflow_run')
+        .set({ status: 'running' })
+        .where('id', '=', input.approvalRequestId)
+        .execute();
+    } catch (error: unknown) {
+      await this.db
+        .updateTable('preview_platform.workflow_run')
+        .set({ status: 'failed' })
+        .where('id', '=', input.approvalRequestId)
+        .execute();
+      await this.db
+        .updateTable('preview_platform.edit_transaction')
+        .set({ status: 'failed' })
+        .where('id', '=', input.transactionId)
+        .execute();
+      this.logger.error(
+        `Unable to start repair supervisor run for ${input.transactionId}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      await this.streamPublisher.publish({
+        chunk: {
+          type: StreamEventType.WORKFLOW_ERROR,
+          payload: { status: 'failed', message: 'Something went wrong.' },
+        },
+        conversationId: input.conversationId,
+        jobId: `${input.approvalRequestId}:workflow-resume`,
+        source: 'workflow-resume',
+        approvalRequestId: input.approvalRequestId,
+        streamId: `${input.approvalRequestId}:workflow-resume`,
+      });
+    }
+  }
+
   private async resumeWorkflowRunAndRelay({
     approvalRequestId,
     workflowId,
     runId,
     conversationId,
+    projectId,
     approved,
     resumeAgentId,
     resumeToolCallId,
@@ -258,14 +360,24 @@ export class CoreService {
     workflowId: string;
     runId: string;
     conversationId: string;
+    projectId: string;
     approved: boolean;
     resumeAgentId: string | null;
     resumeToolCallId: string | null;
   }): Promise<void> {
     const streamId = `${approvalRequestId}:workflow-resume`;
     let workflowErrorPublished = false;
+    const transcriptParts: string[] = [];
 
-    const publishChunk = async (chunk: unknown) => {
+    const publishChunk = async (
+      chunk: unknown,
+      options: { recordTranscript?: boolean } = {},
+    ) => {
+      const transcriptMessage =
+        options.recordTranscript === false
+          ? undefined
+          : getTranscriptMessage(chunk);
+      if (transcriptMessage) transcriptParts.push(transcriptMessage);
       await this.streamPublisher.publish({
         chunk,
         conversationId,
@@ -292,7 +404,7 @@ export class CoreService {
         workflowErrorPublished = true;
       }
 
-      await publishChunk(appEvent);
+      await publishChunk(appEvent, { recordTranscript: false });
     };
     const publishWorkflowError = async () => {
       if (workflowErrorPublished) return;
@@ -323,6 +435,8 @@ export class CoreService {
               runId,
               approved,
               toolCallId: resumeToolCallId,
+              projectId,
+              conversationId,
             })
           : await this.resumeLegacyWorkflow({ workflowId, runId, approved });
 
@@ -432,6 +546,12 @@ export class CoreService {
           `Mastra rejected resume for ${workflowId} run ${runId}; the snapshot may be missing or already resumed`,
         );
       }
+    } finally {
+      await this.transcriptService.storeAssistantMessage({
+        conversationId,
+        message: transcriptParts.join(''),
+        sourceId: `workflow-resume:${approvalRequestId}`,
+      });
     }
   }
 

@@ -199,7 +199,7 @@ export type STAGED_FILE_ENTRY = {
   instructionIndexes: number[];
   applied: boolean;
   verified: boolean;
-  validationStatus: 'pending' | 'passed' | 'failed';
+  validationStatus: 'pending' | 'passed' | 'failed' | 'repair_pending';
   commitStatus:
     | 'pending'
     | 'commit-started'
@@ -208,6 +208,25 @@ export type STAGED_FILE_ENTRY = {
     | 'rolled-back'
     | 'rollback-failed'
     | 'untouched';
+  milestoneId: string | null;
+};
+
+export type STAGED_MILESTONE_STATUS =
+  | 'pending'
+  | 'running'
+  | 'committed'
+  | 'blocked'
+  | 'repair_pending'
+  | 'failed';
+
+export type STAGED_MILESTONE = {
+  id: string;
+  sequence: number;
+  filePaths: string[];
+  dependsOn: string[];
+  status: STAGED_MILESTONE_STATUS;
+  validationStatus: 'pending' | 'passed' | 'failed' | 'repair_pending';
+  commitStatus: 'pending' | 'committed' | 'rolled-back' | 'not-committed';
 };
 
 export type STAGING_MANIFEST = {
@@ -220,6 +239,7 @@ export type STAGING_MANIFEST = {
   totalBytes: number;
   fileCount: number;
   structurePlan: STRUCTURE_PLAN | null;
+  milestones: STAGED_MILESTONE[];
 };
 
 export type UNIFIED_PATCH_RESULT = {
@@ -372,6 +392,21 @@ export const Z_FILE_EDIT: z.ZodType<FILE_EDIT> = z.object({
 
 export const Z_EDIT_AGENT_WORKFLOW_INPUT: z.ZodType<EDIT_AGENT_INPUT> =
   z.array(Z_FILE_EDIT);
+
+export type STAGED_MILESTONE_INPUT = {
+  milestoneId: string;
+  sequence: number;
+  dependsOn: string[];
+  fileEdits: EDIT_AGENT_INPUT;
+};
+
+export const Z_STAGED_MILESTONE_INPUT: z.ZodType<STAGED_MILESTONE_INPUT> =
+  z.object({
+    milestoneId: z.string(),
+    sequence: z.number().int().nonnegative(),
+    dependsOn: z.array(z.string()),
+    fileEdits: Z_EDIT_AGENT_WORKFLOW_INPUT,
+  });
 
 //CREATE BACKUP (parallel to download)
 //src/App.tsx.anvil-bak-<jobId>

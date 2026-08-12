@@ -305,6 +305,7 @@ export class AnvilAgentService {
       .selectFrom('preview_platform.message')
       .select(['role', 'message'])
       .where('conversation_id', '=', conversationId)
+      .orderBy('sequence_number', 'asc')
       .execute();
   }
 }

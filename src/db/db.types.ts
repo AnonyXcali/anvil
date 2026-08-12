@@ -25,6 +25,12 @@ export type JsonValue = JsonArray | JsonObject | JsonPrimitive;
 
 export type PreviewPlatformConversationState = "active" | "awaiting_response" | "errored";
 
+export type PreviewPlatformEditBugStatus = "open" | "repairing" | "resolved";
+
+export type PreviewPlatformEditMilestoneStatus = "blocked" | "committed" | "failed" | "pending" | "repair_pending" | "running";
+
+export type PreviewPlatformEditTransactionStatus = "completed" | "completed_with_issues" | "failed" | "repair_pending" | "repairing" | "running";
+
 export type PreviewPlatformJobStatus = "active" | "completed" | "failed" | "queued";
 
 export type PreviewPlatformProjectStatus = "active" | "errored" | "processing" | "stopped";
@@ -33,7 +39,7 @@ export type PreviewPlatformRole = "assistant" | "system" | "tool" | "user";
 
 export type PreviewPlatformTemplates = "react";
 
-export type PreviewPlatformWorkflowJobStatus = "cancelled" | "completed" | "failed" | "pending" | "running" | "suspended";
+export type PreviewPlatformWorkflowJobStatus = "cancelled" | "completed" | "completed_with_issues" | "failed" | "pending" | "repair_pending" | "repairing" | "running" | "suspended";
 
 export type Timestamp = ColumnType<Date, Date | string, Date | string>;
 
@@ -68,6 +74,54 @@ export interface PreviewPlatformConversation {
   user_id: string;
 }
 
+export interface PreviewPlatformEditBug {
+  affected_files: Generated<Json>;
+  attempt_count: Generated<number>;
+  bug_key: string;
+  category: string;
+  created_at: Generated<Timestamp>;
+  diagnostic: string;
+  id: Generated<string>;
+  milestone_id: string | null;
+  originating_run_id: string;
+  repair_run_id: string | null;
+  resolved_at: Timestamp | null;
+  severity: string;
+  status: Generated<PreviewPlatformEditBugStatus>;
+  transaction_id: string;
+  updated_at: Generated<Timestamp>;
+  validator: string;
+}
+
+export interface PreviewPlatformEditMilestone {
+  affected_files: Generated<Json>;
+  commit_status: Generated<string>;
+  created_at: Generated<Timestamp>;
+  id: Generated<string>;
+  milestone_key: string;
+  originating_run_id: string;
+  sequence: number;
+  status: Generated<PreviewPlatformEditMilestoneStatus>;
+  transaction_id: string;
+  updated_at: Generated<Timestamp>;
+  validation_status: Generated<string>;
+}
+
+export interface PreviewPlatformEditTransaction {
+  completed_at: Timestamp | null;
+  conversation_id: string;
+  created_at: Generated<Timestamp>;
+  id: Generated<string>;
+  manifest_path: string;
+  originating_run_id: string;
+  project_id: string;
+  repair_attempt_count: Generated<number>;
+  repair_budget: Generated<number>;
+  staging_root: string;
+  status: Generated<PreviewPlatformEditTransactionStatus>;
+  updated_at: Generated<Timestamp>;
+}
+
 export interface PreviewPlatformJobs {
   conversation_id: string;
   created_at: Generated<Timestamp>;
@@ -86,6 +140,7 @@ export interface PreviewPlatformMessage {
   message: string;
   role: PreviewPlatformRole;
   sequence_number: Generated<Int8>;
+  source_id: string | null;
   updated_at: Generated<Timestamp>;
 }
 
@@ -204,6 +259,9 @@ export interface DB {
   pgmigrations: Pgmigrations;
   "preview_platform.account": PreviewPlatformAccount;
   "preview_platform.conversation": PreviewPlatformConversation;
+  "preview_platform.edit_bug": PreviewPlatformEditBug;
+  "preview_platform.edit_milestone": PreviewPlatformEditMilestone;
+  "preview_platform.edit_transaction": PreviewPlatformEditTransaction;
   "preview_platform.jobs": PreviewPlatformJobs;
   "preview_platform.message": PreviewPlatformMessage;
   "preview_platform.project": PreviewPlatformProject;

@@ -3,7 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { NodeSSH } from 'node-ssh';
 import { readFileSync } from 'fs';
 import { mkdir, readFile, realpath, stat } from 'fs/promises';
-import { createHash } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 import { dirname, join, posix, resolve, sep } from 'path';
 import { AppEnv } from '../config/env.validation';
 import { getDockerBuildCommands } from './constants/dockerBuild.constants';
@@ -1617,6 +1617,46 @@ EOF`,
         {},
       );
 
+      return result.stdout;
+    } finally {
+      sshNode.dispose();
+    }
+  }
+
+  async replaceProjectFile(
+    projectId: string,
+    filePath: string,
+    content: string,
+  ): Promise<string> {
+    this.validateProjectId(projectId);
+    const normalizedFilePath = this.normalizeProjectRelativePath(
+      filePath,
+      'File path',
+    );
+    const sshNode = new NodeSSH();
+    const remoteWorkspaceDir = this.getProjectWorkspaceDir(projectId);
+    const encodedContent = Buffer.from(content, 'utf8').toString('base64');
+
+    try {
+      await sshNode.connect({
+        host: process.env.SSH_HOST!,
+        port: Number(process.env.SSH_PORT ?? 22),
+        username: process.env.SSH_USERNAME!,
+        privateKey: readFileSync(process.env.SSH_PRIVATE_KEY_PATH!, 'utf8'),
+      });
+      const temporaryPath = `${normalizedFilePath}.anvil-${randomUUID()}.tmp`;
+      const result = await this.runStep(
+        sshNode,
+        'replace-project-file',
+        [
+          `cd ${this.shellQuote(remoteWorkspaceDir)}`,
+          `test -f ${this.shellQuote(normalizedFilePath)}`,
+          `printf '%s' ${this.shellQuote(encodedContent)} | base64 --decode > ${this.shellQuote(temporaryPath)}`,
+          `mv -- ${this.shellQuote(temporaryPath)} ${this.shellQuote(normalizedFilePath)}`,
+          `cat -- ${this.shellQuote(normalizedFilePath)}`,
+        ].join(' && '),
+        {},
+      );
       return result.stdout;
     } finally {
       sshNode.dispose();

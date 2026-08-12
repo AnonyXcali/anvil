@@ -447,6 +447,25 @@ const createEditStep = () => {
       const editAgentRequestContext = new RequestContext<AnvilAgentContext>();
       editAgentRequestContext.set('projectId', projectId);
       editAgentRequestContext.set('callCount', 0);
+      const conversationId = requestContext.get('conversationId');
+      if (typeof conversationId === 'string' && conversationId.trim()) {
+        editAgentRequestContext.set('conversationId', conversationId);
+      }
+      const originatingRunId = requestContext.get('originatingRunId');
+      const editTransactionId = requestContext.get('editTransactionId');
+      if (typeof originatingRunId !== 'string' || !originatingRunId.trim()) {
+        throw new Error(
+          'Original supervisor workflow run ID is unavailable for editing',
+        );
+      }
+      editAgentRequestContext.set('originatingRunId', originatingRunId);
+      if (typeof editTransactionId === 'string' && editTransactionId.trim()) {
+        editAgentRequestContext.set('editTransactionId', editTransactionId);
+      }
+      const repairApprovalId = requestContext.get('repairApprovalId');
+      if (typeof repairApprovalId === 'string' && repairApprovalId.trim()) {
+        editAgentRequestContext.set('repairApprovalId', repairApprovalId);
+      }
       const structurePlan = inputData[0]?.structure_plan;
       if (!structurePlan) {
         throw new Error('Canonical structural plan is unavailable for editing');

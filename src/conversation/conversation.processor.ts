@@ -29,8 +29,13 @@ export class ConversationProcessor extends WorkerHost {
     this.logger.log('============== ANVIL CONVO AGENT =================');
     this.logger.log('INVOKED');
     this.logger.log('============== ANVIL CONVO AGENT =================');
+    const latestMessage = job.data.messages[job.data.messages.length - 1];
+    const messages =
+      latestMessage?.role === 'user' && latestMessage.content === job.data.query
+        ? job.data.messages
+        : [...job.data.messages, { role: 'user', content: job.data.query }];
     const message = await this.conversationService.streamConversation(
-      [...job.data.messages, { role: 'user', content: job.data.query }],
+      messages,
       job.data.conversation_id,
       job.data.project_id,
       String(jobId),
@@ -72,6 +77,7 @@ export class ConversationProcessor extends WorkerHost {
       await this.conversationService.storeConstructedMessageToDb(
         message,
         conversationId,
+        `conversation:${String(job.id)}`,
       );
     }
 

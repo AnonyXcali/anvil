@@ -39,6 +39,7 @@ const Z_RUN_EDIT_WORKFLOW_OUTPUT = z.object({
   success: z.boolean(),
   files: z.array(z.string()),
   error: z.string().nullable(),
+  status: z.enum(['completed', 'completed_with_issues']).default('completed'),
 });
 
 function getProjectId(context: ToolExecutionContext): string {
@@ -219,6 +220,7 @@ export function createAnvilEditAgentTools(deps: {
               success: false,
               files: [],
               error: 'At least one file edit is required',
+              status: 'completed' as const,
             };
           }
 
@@ -242,6 +244,7 @@ export function createAnvilEditAgentTools(deps: {
               success: false,
               files: [],
               error: 'Edit workflow was already invoked for this handoff',
+              status: 'completed' as const,
             };
           }
 
@@ -273,6 +276,7 @@ export function createAnvilEditAgentTools(deps: {
               success: false,
               files: [],
               error,
+              status: 'completed' as const,
             };
           }
 
@@ -280,12 +284,21 @@ export function createAnvilEditAgentTools(deps: {
             success: true,
             files: result.result.map((fileEdit) => fileEdit.file_path),
             error: null,
+            status:
+              context.requestContext?.get('preserveRepairArtifacts') === true
+                ? ('completed_with_issues' as const)
+                : ('completed' as const),
           };
         } catch (error: unknown) {
           const message = getErrorMessage(error);
           await cleanUpFailedEdit(context, anvilAgentEditService);
           context.requestContext?.set('editWorkflowFailure', message);
-          return { success: false, files: [], error: message };
+          return {
+            success: false,
+            files: [],
+            error: message,
+            status: 'completed' as const,
+          };
         }
       },
     }),

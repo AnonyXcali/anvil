@@ -7,6 +7,7 @@ import { ChannelsModule } from 'src/channels/channels.module';
 import { ConversationProcessor } from './conversation.processor';
 import { JobModule } from 'src/job/job.module';
 import { ProjectModule } from 'src/project/project.module';
+import { ConversationTranscriptService } from './conversation-transcript.service';
 
 @Module({
   imports: [
@@ -19,7 +20,11 @@ import { ProjectModule } from 'src/project/project.module';
       name: 'conversation-processor',
     }),
   ],
-  providers: [ConversationService, ConversationProcessor],
-  exports: [ConversationService],
+  providers: [
+    ConversationService,
+    ConversationProcessor,
+    ConversationTranscriptService,
+  ],
+  exports: [ConversationService, ConversationTranscriptService],
 })
 export class ConversationModule {}

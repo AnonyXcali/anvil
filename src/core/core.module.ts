@@ -7,6 +7,7 @@ import { ChannelsModule } from 'src/channels/channels.module';
 import { SharedredisModule } from 'src/sharedredis/sharedredis.module';
 import { AnvilAgentStreamPublisher } from 'src/anvil-agent/anvil-agent-stream-publisher.service';
 import { AnvilAgentSupervisorModule } from 'src/anvil-agent-supervisor/anvil-agent-supervisor.module';
+import { ConversationTranscriptService } from 'src/conversation/conversation-transcript.service';
 
 @Module({
   imports: [
@@ -18,7 +19,11 @@ import { AnvilAgentSupervisorModule } from 'src/anvil-agent-supervisor/anvil-age
       name: 'intent-execution',
     }),
   ],
-  providers: [AnvilAgentStreamPublisher, CoreService],
+  providers: [
+    AnvilAgentStreamPublisher,
+    CoreService,
+    ConversationTranscriptService,
+  ],
   controllers: [CoreController],
   exports: [CoreService],
 })

@@ -35,12 +35,14 @@ import { createAnvilIntentAgent } from './agents/anvil-intent-agent';
 import { createAnvilProjectNameAgent } from './agents/anvil-project-name-agent';
 import type { AppEnv } from 'src/config/env.validation';
 import { Logger } from '@nestjs/common';
+import { AnvilRepairStateService } from 'src/anvil-agent-edit/anvil-repair-state.service';
 
 export async function createMastra(dep: {
   anvilAgentSearchService: AnvilAgentSearchService;
   anvilAgentEditService: AnvilAgentEditService;
   anvilEditStagingService: AnvilEditStagingService;
   anvilHistoryService: AnvilHistoryService;
+  anvilRepairStateService: AnvilRepairStateService;
   env: Pick<
     AppEnv,
     | 'EXA_KEY'
@@ -71,11 +73,13 @@ export async function createMastra(dep: {
     anvilAgentEditService: dep.anvilAgentEditService,
     anvilEditStagingService: dep.anvilEditStagingService,
     anvilHistoryService: dep.anvilHistoryService,
+    anvilRepairStateService: dep.anvilRepairStateService,
   });
   const stagedEditWorkflow = createStagedEditWorkflow({
     anvilAgentEditService: dep.anvilAgentEditService,
     anvilEditStagingService: dep.anvilEditStagingService,
     anvilHistoryService: dep.anvilHistoryService,
+    anvilRepairStateService: dep.anvilRepairStateService,
   });
 
   return new Mastra({

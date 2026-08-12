@@ -29,7 +29,7 @@ export const ANVIL_AGENT_RUNTIME_CONFIG = {
   intent: { model: 'openai/gpt-5.5' },
   projectName: { model: 'openai/gpt-5.5' },
   search: {
-    model: 'anthropic/claude-opus-5',
+    model: 'openai/gpt-5.5',
     maxRetries: 0,
     maxProcessorRetries: 1,
     errorProcessors: [
@@ -39,8 +39,9 @@ export const ANVIL_AGENT_RUNTIME_CONFIG = {
       }),
     ],
   },
-  supervisor: { model: 'openai/gpt-5.6-luna' },
-  planning: { model: 'anthropic/claude-opus-5' },
+  //anthropic/claude-opus-5
+  supervisor: { model: 'openai/gpt-5.5' },
+  planning: { model: 'openai/gpt-5.5' },
   editing: { model: 'openai/gpt-5.6-luna' },
   verify: { model: 'openai/gpt-5.6-luna' },
   weather: { model: 'openai/gpt-5-mini' },

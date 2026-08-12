@@ -66,6 +66,34 @@ export class AnvilEditStagingService {
     };
   }
 
+  async openWorkspace(
+    projectId: string,
+    editRunId: string,
+    rootPath: string,
+  ): Promise<StagingWorkspace> {
+    this.assertSinglePathSegment(projectId, 'Project ID');
+    this.assertSinglePathSegment(editRunId, 'Edit run ID');
+    const realRootPath = await realpath(rootPath);
+    const tempRoot = resolve(process.cwd(), 'temp');
+    const realTempRoot = await realpath(tempRoot);
+    this.assertWithin(realTempRoot, realRootPath, 'Staging root');
+    const files = await this.collectWorkspaceFiles(realRootPath);
+    const fileSizes = new Map<string, number>();
+    let totalBytes = 0;
+    for (const file of files) {
+      const size = (await stat(file.localPath)).size;
+      fileSizes.set(file.projectPath, size);
+      totalBytes += size;
+    }
+    return {
+      projectId,
+      editRunId,
+      rootPath: realRootPath,
+      fileSizes,
+      totalBytes,
+    };
+  }
+
   resolveProjectPath(workspace: StagingWorkspace, projectPath: string): string {
     const normalizedProjectPath = this.normalizeProjectPath(projectPath);
     const localPath = resolve(
@@ -155,6 +183,28 @@ export class AnvilEditStagingService {
     const rootPath = resolve(workspace.rootPath);
     this.assertWithin(realTempRoot, rootPath, 'Staging root');
     await rm(rootPath, { recursive: true, force: true });
+  }
+
+  private async collectWorkspaceFiles(
+    rootPath: string,
+  ): Promise<Array<{ projectPath: string; localPath: string }>> {
+    const result: Array<{ projectPath: string; localPath: string }> = [];
+    const visit = async (currentPath: string): Promise<void> => {
+      for (const entry of await readdir(currentPath, { withFileTypes: true })) {
+        const localPath = join(currentPath, entry.name);
+        if (entry.name === '.anvil-manifest.json') continue;
+        if (entry.isDirectory()) {
+          await visit(localPath);
+        } else if (entry.isFile()) {
+          result.push({
+            projectPath: relative(rootPath, localPath).split(sep).join('/'),
+            localPath,
+          });
+        }
+      }
+    };
+    await visit(rootPath);
+    return result;
   }
 
   async writeManifest(

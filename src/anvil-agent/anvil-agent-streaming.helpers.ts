@@ -5,6 +5,7 @@ type AppStreamEventStatus =
   | 'started'
   | 'running'
   | 'completed'
+  | 'completed_with_issues'
   | 'failed'
   | 'suspended'
   | 'cancelled';
@@ -51,6 +52,7 @@ type StatusMessages = {
   failed?: string;
   suspended?: string;
   cancelled?: string;
+  completed_with_issues?: string;
 };
 
 const WORKFLOW_STEP_STATUS_MESSAGES: Record<string, StatusMessages> = {
@@ -70,6 +72,8 @@ const WORKFLOW_STEP_STATUS_MESSAGES: Record<string, StatusMessages> = {
   'anvil-agent-workflow-edit-step': {
     started: 'Starting the edit workflow.',
     completed: 'Finished the edit workflow.',
+    completed_with_issues:
+      'The requested changes were applied, but a few issues remain to be fixed.',
     failed: 'The edit workflow failed.',
   },
   'anvil-edit-agent-nested-workflow-download-file-step': {
@@ -476,6 +480,29 @@ export function isEmptyStreamChunk(chunk: unknown): boolean {
   return false;
 }
 
+/** Returns only content that belongs in the user-visible conversation history. */
+export function getTranscriptMessage(chunk: unknown): string | undefined {
+  if (!isRecord(chunk)) return undefined;
+  const type = getStreamChunkType(chunk);
+  const payload = getNestedRecord(chunk, 'payload') ?? {};
+  if (type === 'text-delta')
+    return getStringValue(payload, 'text') ?? undefined;
+  if (
+    type === 'approval_required' ||
+    type === StreamEventType.APPROVAL_REQUIRED
+  ) {
+    return (
+      getStringValue(payload, 'summary') ??
+      getStringValue(payload, 'message') ??
+      undefined
+    );
+  }
+  if (type === StreamEventType.WORKFLOW_ERROR) {
+    return getStringValue(payload, 'message') ?? 'Something went wrong.';
+  }
+  return undefined;
+}
+
 /** Reads the workflow status emitted by a workflow-finish chunk. */
 export function getWorkflowFinishStatus(chunk: unknown): string | undefined {
   if (!isRecord(chunk)) {
@@ -514,6 +541,18 @@ export function buildAppStreamEvent(chunk: unknown): AppStreamEvent | null {
         status: 'started',
         message: 'Started preparing changes.',
         step: 'workflow',
+      },
+    };
+  }
+
+  if (chunkType === 'edit_repair_pending') {
+    return {
+      type: StreamEventType.EDIT_STATUS,
+      payload: {
+        status: 'completed_with_issues',
+        message:
+          'The requested changes were applied, but a few issues remain to be fixed.',
+        step: 'repair-summary',
       },
     };
   }
@@ -558,13 +597,27 @@ export function buildAppStreamEvent(chunk: unknown): AppStreamEvent | null {
   }
 
   if (chunkType === 'workflow-finish') {
-    const failed = getStringValue(payload, 'workflowStatus') === 'failed';
+    const workflowStatus = getStringValue(payload, 'workflowStatus');
+    const failed = workflowStatus === 'failed';
+    const partial = workflowStatus === 'completed_with_issues';
 
     return {
-      type: failed ? StreamEventType.WORKFLOW_ERROR : StreamEventType.COMPLETED,
+      type: failed
+        ? StreamEventType.WORKFLOW_ERROR
+        : partial
+          ? StreamEventType.EDIT_STATUS
+          : StreamEventType.COMPLETED,
       payload: {
-        status: failed ? 'failed' : 'completed',
-        message: failed ? 'Something went wrong.' : 'Workflow completed.',
+        status: failed
+          ? 'failed'
+          : partial
+            ? 'completed_with_issues'
+            : 'completed',
+        message: failed
+          ? 'Something went wrong.'
+          : partial
+            ? 'The requested changes were applied, but a few issues remain to be fixed.'
+            : 'Workflow completed.',
         step: 'workflow',
       },
     };

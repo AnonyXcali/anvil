@@ -17,6 +17,10 @@ export type ANVIL_SUPERVISOR_AGENT_JOB_DATA = {
   messages: Array<Record<string, string>>;
   project_id: string;
   stream_id: string;
+  originating_run_id?: string;
+  repair_transaction_id?: string;
+  repair_approval_id?: string;
+  stream_source?: 'supervisor' | 'workflow-resume';
 };
 
 type SEARCH_OUTPUT_PLAN_INPUT = {

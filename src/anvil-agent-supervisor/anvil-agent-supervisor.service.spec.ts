@@ -51,7 +51,14 @@ describe('AnvilAgentSupervisorService', () => {
     expect(supervisorAgent.listSuspendedRuns).toHaveBeenCalledWith();
     expect(resumeStream).toHaveBeenCalledWith(
       { approved: true },
-      { runId: 'supervisor-run-1' },
+      expect.objectContaining({ runId: 'supervisor-run-1' }),
+    );
+    const calls = resumeStream.mock.calls as unknown as unknown[][];
+    const resumeOptions = calls[0]?.[1] as {
+      requestContext: { get(key: string): unknown };
+    };
+    expect(resumeOptions.requestContext.get('originatingRunId')).toBe(
+      'supervisor-run-1',
     );
   });
 

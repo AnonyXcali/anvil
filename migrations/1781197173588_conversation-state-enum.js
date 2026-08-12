@@ -74,9 +74,13 @@ export const up = (pgm) => {
       role preview_platform.role NOT NULL,
       message text NOT NULL,
       conversation_id uuid NOT NULL,
+      source_id text,
       created_at timestamptz NOT NULL DEFAULT now(),
       updated_at timestamptz NOT NULL DEFAULT now(),
       sequence_number BIGSERIAL,
+
+      CONSTRAINT message_conversation_source_unique
+        UNIQUE (conversation_id, source_id),
 
       FOREIGN KEY ("conversation_id")
           REFERENCES "preview_platform"."conversation"("id")

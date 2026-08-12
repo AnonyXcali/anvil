@@ -10,11 +10,14 @@ import { AnvilHistoryModule } from 'src/anvil-history/anvil-history.module';
 import { AnvilHistoryService } from 'src/anvil-history/anvil-history.service';
 import { ConfigService } from '@nestjs/config';
 import type { AppEnv } from 'src/config/env.validation';
+import { DbModule } from 'src/db/db.module';
+import { AnvilRepairStateService } from 'src/anvil-agent-edit/anvil-repair-state.service';
 
 @Global()
 @Module({
   imports: [
     AnvilHistoryModule,
+    DbModule,
     MastraModule.registerAsync({
       imports: [
         AnvilAgentSearchModule,
@@ -26,6 +29,7 @@ import type { AppEnv } from 'src/config/env.validation';
         anvilAgentEditService: AnvilAgentEditService,
         anvilEditStagingService: AnvilEditStagingService,
         anvilHistoryService: AnvilHistoryService,
+        anvilRepairStateService: AnvilRepairStateService,
         configService: ConfigService<AppEnv, true>,
       ): Promise<MastraModuleOptions> => ({
         prefix: '/api',
@@ -34,6 +38,7 @@ import type { AppEnv } from 'src/config/env.validation';
           anvilAgentEditService,
           anvilEditStagingService,
           anvilHistoryService,
+          anvilRepairStateService,
           env: {
             MASTRA_DATABASE_URL: configService.get('MASTRA_DATABASE_URL', {
               infer: true,
@@ -54,6 +59,7 @@ import type { AppEnv } from 'src/config/env.validation';
         AnvilAgentEditService,
         AnvilEditStagingService,
         AnvilHistoryService,
+        AnvilRepairStateService,
         ConfigService,
       ],
     }),

@@ -34,6 +34,10 @@ export class AnvilSupervisorAgentProcessor extends WorkerHost {
         messages,
         project_id: projectId,
         stream_id: streamId,
+        originating_run_id: originatingRunId,
+        repair_transaction_id: repairTransactionId,
+        repair_approval_id: repairApprovalId,
+        stream_source: streamSource,
       } = {},
     } = job || {};
 
@@ -63,6 +67,12 @@ export class AnvilSupervisorAgentProcessor extends WorkerHost {
       String(id),
       projectId,
       streamId,
+      originatingRunId,
+      {
+        repairTransactionId,
+        repairApprovalId,
+        source: streamSource,
+      },
     );
 
     await job.updateProgress(100);

@@ -14,6 +14,9 @@ export const up = (pgm) => {
       'running',
       'suspended',
       'completed',
+      'completed_with_issues',
+      'repair_pending',
+      'repairing',
       'failed',
       'cancelled',
       'pending'

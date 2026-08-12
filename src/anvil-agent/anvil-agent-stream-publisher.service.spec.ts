@@ -42,4 +42,20 @@ describe('AnvilAgentStreamPublisher', () => {
     ).resolves.toBe(false);
     expect(publishAndStoreChunk).not.toHaveBeenCalled();
   });
+
+  it('does not persist transcript content at the Redis publisher boundary', async () => {
+    const publishAndStoreChunk = jest.fn().mockResolvedValue(undefined);
+    const publisher = new AnvilAgentStreamPublisher({
+      publishAndStoreChunk,
+    } as never);
+
+    await publisher.publish({
+      chunk: { type: 'text-delta', payload: { text: 'Visible answer' } },
+      conversationId: 'conversation-1',
+      jobId: 'job-1',
+      source: 'supervisor',
+    });
+
+    expect(publishAndStoreChunk).toHaveBeenCalledTimes(1);
+  });
 });

@@ -9,9 +9,11 @@ import {
   INSTRUCTION,
   STAGING_MANIFEST,
   STAGED_FILE_ENTRY,
+  STAGED_MILESTONE_INPUT,
+  Z_STAGED_MILESTONE_INPUT,
 } from './anvil-agent-edit.types';
 import { z } from 'zod';
-import { randomUUID } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 import { posix } from 'path';
 import { AnvilAgentEditService } from './anvil-agent-edit.service';
 import {
@@ -19,6 +21,7 @@ import {
   type StagingWorkspace,
 } from './anvil-edit-staging.service';
 import { AnvilHistoryService } from 'src/anvil-history/anvil-history.service';
+import { AnvilRepairStateService } from './anvil-repair-state.service';
 import type { HistoryEntryInput } from 'src/anvil-history/anvil-history.types';
 import { readFile } from 'fs/promises';
 import { AGENT_DIRECTORY } from 'src/agent.directory';
@@ -33,6 +36,14 @@ import {
 import { validateAndOrderStagedInput } from './staged-transaction.validation';
 import { getEditOperationContractError } from './edit-operation.validation';
 import { unwrapStagedBranchResult } from './staged-branch-result';
+import {
+  assignMilestone,
+  buildStagedMilestones,
+  getMilestoneDirectories,
+  getMilestoneFiles,
+  getMilestoneRollbackFiles,
+  getReadyMilestones,
+} from './staged-milestone';
 import type {
   EditCleanupTarget,
   EditDiagnosticSink,
@@ -44,7 +55,177 @@ type EditWorkflowDeps = {
   anvilAgentEditService: AnvilAgentEditService;
   anvilEditStagingService: AnvilEditStagingService;
   anvilHistoryService: AnvilHistoryService;
+  anvilRepairStateService: AnvilRepairStateService;
 };
+
+const createStagedPrepareFileStep = (deps: EditWorkflowDeps) =>
+  createStep({
+    id: 'anvil-agent-staged-prepare-file-step',
+    inputSchema: Z_FILE_EDIT,
+    outputSchema: Z_FILE_EDIT,
+    stateSchema: Z_EDIT_AGENT_WORKFLOW_INPUT,
+    execute: async (context) => {
+      const { inputData, requestContext, state } = context;
+      const projectId = requestContext.get('projectId');
+      const workspace = requestContext.get('stagingWorkspace');
+      const manifestValue = requestContext.get('stagingManifest');
+      if (typeof projectId !== 'string' || !projectId.trim()) {
+        throw new Error(
+          'Project ID is unavailable for staged file preparation',
+        );
+      }
+      if (!workspace || typeof workspace !== 'object') {
+        throw new Error(
+          'Staging workspace is unavailable for file preparation',
+        );
+      }
+      if (
+        !manifestValue ||
+        typeof manifestValue !== 'object' ||
+        !('files' in manifestValue)
+      ) {
+        throw new Error('Staging manifest is unavailable for file preparation');
+      }
+      const stagingWorkspace = workspace as StagingWorkspace;
+      const manifest = manifestValue as STAGING_MANIFEST;
+      const existingEntry = manifest.files.find(
+        (file) => file.projectPath === inputData.file_path,
+      );
+
+      if (existingEntry && existingEntry.localPath) {
+        const existingState = state.map((file) =>
+          file.file_path === inputData.file_path
+            ? {
+                ...file,
+                downloaded_local_file_path: existingEntry.localPath,
+                hash: existingEntry.originalHash,
+              }
+            : file,
+        );
+        await context.setState(existingState);
+        return {
+          ...inputData,
+          downloaded_local_file_path: existingEntry.localPath,
+          hash: existingEntry.originalHash,
+        };
+      }
+
+      const operation = inputData.operation;
+      await emitEditDiagnostic(requestContext, 'staging_file_prepare_started', {
+        filePath: inputData.file_path,
+        operation,
+        fileExists: inputData.file_exists,
+      });
+
+      let localPath: string;
+      let originalHash: string | null = null;
+      if (operation === 'create') {
+        const content =
+          inputData.instructions.find(
+            (instruction) => instruction.code !== null,
+          )?.code ?? '';
+        localPath = await deps.anvilEditStagingService.writeFile(
+          stagingWorkspace,
+          inputData.file_path,
+          content,
+        );
+        await emitEditDiagnostic(requestContext, 'staging_file_create_local', {
+          filePath: inputData.file_path,
+          operation,
+          fileExists: inputData.file_exists,
+        });
+      } else {
+        await emitEditDiagnostic(
+          requestContext,
+          'staging_file_download_started',
+          {
+            filePath: inputData.file_path,
+            operation,
+            fileExists: inputData.file_exists,
+          },
+        );
+        try {
+          const downloaded = await deps.anvilAgentEditService.downloadFile(
+            projectId,
+            inputData.file_path,
+          );
+          localPath = await deps.anvilEditStagingService.copyFile(
+            stagingWorkspace,
+            inputData.file_path,
+            downloaded.localFilePath,
+          );
+          await deps.anvilAgentEditService.cleanUpLocalFile(
+            downloaded.localFilePath,
+          );
+          originalHash = downloaded.hash;
+        } catch (error: unknown) {
+          await emitEditDiagnostic(
+            requestContext,
+            'staging_file_download_failed',
+            {
+              filePath: inputData.file_path,
+              operation,
+              fileExists: inputData.file_exists,
+              status: 'failed',
+            },
+          );
+          const reason = error instanceof Error ? error.message : String(error);
+          throw new Error(
+            `Failed to download ${inputData.file_path} (operation: ${operation}): ${reason}`,
+            { cause: error },
+          );
+        }
+      }
+
+      manifest.totalBytes = stagingWorkspace.totalBytes;
+      const entry: STAGED_FILE_ENTRY = {
+        projectPath: inputData.file_path,
+        localPath,
+        operation,
+        existedRemotely: operation !== 'create',
+        originalHash,
+        backupPath: null,
+        instructionIndexes: inputData.instructions.map((_, index) => index),
+        applied: false,
+        verified: false,
+        validationStatus: 'pending',
+        commitStatus: 'pending',
+        milestoneId: requestContext.get('activeMilestoneId') ?? null,
+      };
+      const existingEntryIndex = manifest.files.findIndex(
+        (file) => file.projectPath === entry.projectPath,
+      );
+      if (existingEntryIndex >= 0) {
+        manifest.files[existingEntryIndex] = entry;
+      } else {
+        manifest.files.push(entry);
+      }
+      requestContext.set('stagingManifest', manifest);
+      await persistStagingManifest(requestContext, manifest, deps);
+      await emitEditDiagnostic(requestContext, 'staging_file_prepared', {
+        filePath: inputData.file_path,
+        operation,
+      });
+
+      const nextState = state.map((file) =>
+        file.file_path === inputData.file_path
+          ? {
+              ...file,
+              downloaded_local_file_path: localPath,
+              hash: originalHash,
+              backup_file: null,
+            }
+          : file,
+      );
+      await context.setState(nextState);
+      return {
+        ...inputData,
+        downloaded_local_file_path: localPath,
+        hash: originalHash,
+        backup_file: null,
+      };
+    },
+  });
 
 const stagedEditWorkflowLogger = new Logger('AnvilStagedEditWorkflow');
 
@@ -220,6 +401,111 @@ async function appendWorkflowHistoryBestEffort(
   }
 }
 
+async function recordRepairableFailure(
+  deps: EditWorkflowDeps,
+  requestContext: RequestContext<unknown>,
+  input: {
+    filePath: string;
+    category: string;
+    validator: string;
+    diagnostic: string;
+    milestoneId?: string;
+  },
+): Promise<void> {
+  const transactionId = requestContext.get('editTransactionId');
+  const originatingRunId = requestContext.get('originatingRunId');
+  const projectId = requestContext.get('projectId');
+  if (
+    typeof transactionId !== 'string' ||
+    typeof originatingRunId !== 'string' ||
+    typeof projectId !== 'string'
+  ) {
+    await emitEditDiagnostic(requestContext, 'repair_state_write_warning', {
+      message: `Repairable failure has no persisted transaction for ${input.filePath}`,
+      filePath: input.filePath,
+    });
+    return;
+  }
+  const bugKey = `BUG-${createHash('sha256')
+    .update(`${input.category}:${input.filePath}:${input.validator}`)
+    .digest('hex')
+    .slice(0, 12)
+    .toUpperCase()}`;
+  try {
+    await deps.anvilRepairStateService.upsertBug(transactionId, {
+      bugKey,
+      milestoneId: input.milestoneId,
+      severity: 'repairable',
+      category: input.category,
+      validator: input.validator,
+      diagnostic: input.diagnostic,
+      affectedFiles: [input.filePath],
+      originatingRunId,
+    });
+  } catch (error: unknown) {
+    await emitEditDiagnostic(requestContext, 'repair_state_write_warning', {
+      message: error instanceof Error ? error.message : String(error),
+      filePath: input.filePath,
+    });
+  }
+  try {
+    await deps.anvilHistoryService.appendHistoryEntry(projectId, {
+      subject: `Repairable ${input.category} finding`,
+      status: 'failed',
+      changesMade: input.diagnostic,
+      files: [input.filePath],
+      actor: 'anvil-edit-workflow.repair-classifier',
+      bugId: bugKey,
+      milestoneId: input.milestoneId,
+      validator: input.validator,
+      originatingRunId,
+      classification: 'repairable',
+    });
+    await deps.anvilHistoryService.appendBugEntry(
+      projectId,
+      [
+        `## ${bugKey}`,
+        '- status: open',
+        '- severity: repairable',
+        `- category: ${input.category}`,
+        `- milestone: ${input.milestoneId ?? 'unknown'}`,
+        `- validator: ${input.validator}`,
+        `- originating_run_id: ${originatingRunId}`,
+        `- affected_files: ${input.filePath}`,
+        `- diagnostic: ${input.diagnostic.replaceAll('\n', ' ')}`,
+        '- attempt_count: 0',
+        '',
+      ].join('\n'),
+    );
+  } catch (error: unknown) {
+    await emitEditDiagnostic(requestContext, 'history_write_warning', {
+      message: error instanceof Error ? error.message : String(error),
+      subject: `Repairable ${input.category} finding`,
+    });
+  }
+  try {
+    await deps.anvilRepairStateService.setTransactionStatus(
+      transactionId,
+      'completed_with_issues',
+    );
+  } catch (error: unknown) {
+    await emitEditDiagnostic(requestContext, 'repair_state_write_warning', {
+      message: error instanceof Error ? error.message : String(error),
+      filePath: input.filePath,
+    });
+  }
+  requestContext.set('preserveRepairArtifacts', true);
+  if (requestContext.get('repairPendingEmitted') !== true) {
+    requestContext.set('repairPendingEmitted', true);
+    await emitEditDiagnostic(requestContext, 'edit_repair_pending', {
+      status: 'completed_with_issues',
+      message:
+        'The requested changes were applied, but a few issues remain to be fixed.',
+      transactionId,
+    });
+  }
+}
+
 async function validateCssStage(
   historyService: AnvilHistoryService,
   requestContext: RequestContext<unknown>,
@@ -298,6 +584,7 @@ async function validateCssStage(
 async function validateStagedProjectImports(
   deps: EditWorkflowDeps,
   manifest: STAGING_MANIFEST,
+  scopedMilestoneId?: string,
 ): Promise<void> {
   const stagedPaths = new Set(
     manifest.files
@@ -313,7 +600,10 @@ async function validateStagedProjectImports(
     /(?:from\s+|import\s*(?:\(\s*)?|require\s*\()(['"])([^'"]+)\1/g;
   const extensions = ['', '.ts', '.tsx', '.js', '.jsx', '.css'];
 
-  for (const file of manifest.files) {
+  for (const file of manifest.files.filter(
+    (item) =>
+      scopedMilestoneId === undefined || item.milestoneId === scopedMilestoneId,
+  )) {
     if (
       file.operation === 'delete' ||
       !/\.(?:ts|tsx|js|jsx|css)$/.test(file.projectPath)
@@ -829,20 +1119,47 @@ const createVerifyStep = (deps: EditWorkflowDeps) => {
             );
 
             if (!scorerComplete) {
-              throw new Error(
+              const scorerError =
                 scorerFailureReason ||
-                  `Verification failed for ${inputData.file_path}`,
-              );
+                `Verification failed for ${inputData.file_path}`;
+              const staged = context.requestContext.get('stagingManifest');
+              if (staged && typeof staged === 'object' && 'files' in staged) {
+                await recordRepairableFailure(deps, context.requestContext, {
+                  filePath: inputData.file_path,
+                  category: 'verifier-scorer',
+                  validator: 'rubric-scorer',
+                  diagnostic: scorerError,
+                });
+              } else {
+                throw new Error(scorerError);
+              }
             }
 
-            await validateCssStage(
+            const postCssValidation = await validateCssStage(
               deps.anvilHistoryService,
               context.requestContext,
               inputData.file_path,
               downloadedLocalFilePath,
               'post',
-              true,
+              false,
             );
+            if (!postCssValidation.valid) {
+              const staged = context.requestContext.get('stagingManifest');
+              if (staged && typeof staged === 'object' && 'files' in staged) {
+                await recordRepairableFailure(deps, context.requestContext, {
+                  filePath: inputData.file_path,
+                  category: 'css-validation',
+                  validator: 'css-validation',
+                  diagnostic: postCssValidation.findings
+                    .map((finding) => finding.message)
+                    .join('; '),
+                });
+              } else {
+                throw new Error(
+                  `CSS validation failed for ${inputData.file_path}`,
+                );
+              }
+            }
 
             await emitEditDiagnostic(
               context.requestContext,
@@ -1699,7 +2016,7 @@ const createStagedPrepareStep = (deps: EditWorkflowDeps) =>
   createStep({
     id: STAGING_PREPARE_STEP,
     inputSchema: Z_EDIT_AGENT_WORKFLOW_INPUT,
-    outputSchema: Z_EDIT_AGENT_WORKFLOW_INPUT,
+    outputSchema: z.array(Z_STAGED_MILESTONE_INPUT),
     stateSchema: Z_EDIT_AGENT_WORKFLOW_INPUT,
     execute: async (context) => {
       const { requestContext } = context;
@@ -1729,26 +2046,88 @@ const createStagedPrepareStep = (deps: EditWorkflowDeps) =>
           throw new Error(operationError);
         }
       }
-      const stagingWorkspace =
-        await deps.anvilEditStagingService.createWorkspace(projectId, runId);
+      const existingTransactionId = requestContext.get('editTransactionId');
+      const existingTransaction =
+        typeof existingTransactionId === 'string'
+          ? await deps.anvilRepairStateService.getTransaction(
+              existingTransactionId,
+            )
+          : undefined;
+      const stagingWorkspace = existingTransaction
+        ? await deps.anvilEditStagingService.openWorkspace(
+            projectId,
+            runId,
+            existingTransaction.staging_root,
+          )
+        : await deps.anvilEditStagingService.createWorkspace(projectId, runId);
       const stagingRoot = stagingWorkspace.rootPath;
       const plan = inputData[0]?.structure_plan;
-      const manifest: STAGING_MANIFEST = {
-        projectId,
-        editRunId: runId,
-        stagingRoot,
-        files: [],
-        directoriesToCreate: plan?.directories_to_create ?? [],
-        createdDirectories: [],
-        totalBytes: 0,
-        fileCount: inputData.length,
-        structurePlan: plan ?? null,
-      };
+      const manifest: STAGING_MANIFEST = existingTransaction
+        ? await deps.anvilEditStagingService.readManifest(stagingWorkspace)
+        : {
+            projectId,
+            editRunId: runId,
+            stagingRoot,
+            files: [],
+            directoriesToCreate: plan?.directories_to_create ?? [],
+            createdDirectories: [],
+            totalBytes: 0,
+            fileCount: inputData.length,
+            structurePlan: plan ?? null,
+            milestones: buildStagedMilestones(plan ?? null, inputData),
+          };
+      manifest.milestones ??= buildStagedMilestones(
+        manifest.structurePlan ?? plan ?? null,
+        inputData,
+      );
+      for (const entry of manifest.files) {
+        entry.milestoneId ??= assignMilestone(manifest.milestones, entry);
+      }
+      manifest.editRunId = runId;
+      manifest.fileCount = Math.max(manifest.fileCount, inputData.length);
       if (manifest.fileCount > 500) {
         throw new Error('Staged edit exceeds the 500-file limit');
       }
       requestContext.set('stagingManifest', manifest);
       requestContext.set('stagingWorkspace', stagingWorkspace);
+      const conversationId = requestContext.get('conversationId');
+      const originatingRunId = requestContext.get('originatingRunId');
+      if (
+        !existingTransaction &&
+        typeof conversationId === 'string' &&
+        typeof originatingRunId === 'string' &&
+        conversationId.trim() &&
+        originatingRunId.trim()
+      ) {
+        const transactionId =
+          await deps.anvilRepairStateService.createTransaction({
+            projectId,
+            conversationId,
+            originatingRunId,
+            stagingRoot: stagingWorkspace.rootPath,
+            manifestPath: `${stagingWorkspace.rootPath}/.anvil-manifest.json`,
+          });
+        requestContext.set('editTransactionId', transactionId);
+        for (const [sequence, phase] of plan?.phases.entries() ?? []) {
+          const affectedFiles = phase.file_paths.filter((path) =>
+            inputData.some((file) => file.file_path === path),
+          );
+          if (affectedFiles.length === 0) continue;
+          await deps.anvilRepairStateService.upsertMilestone({
+            transactionId,
+            milestoneKey: phase.id,
+            sequence,
+            affectedFiles,
+            originatingRunId,
+          });
+        }
+      }
+      if (existingTransaction) {
+        await deps.anvilRepairStateService.setTransactionStatus(
+          existingTransaction.id,
+          'repairing',
+        );
+      }
       await deps.anvilEditStagingService.writeManifest(
         stagingWorkspace,
         manifest,
@@ -1757,120 +2136,24 @@ const createStagedPrepareStep = (deps: EditWorkflowDeps) =>
         fileCount: manifest.fileCount,
       });
 
-      const nextState: FILE_EDIT[] = [];
-      for (const fileEdit of inputData) {
-        const operation = fileEdit.operation;
-        await emitEditDiagnostic(
-          requestContext,
-          'staging_file_prepare_started',
-          {
-            filePath: fileEdit.file_path,
-            operation,
-            fileExists: fileEdit.file_exists,
-          },
-        );
-        let localPath: string;
-        let originalHash: string | null = null;
-        if (operation === 'create') {
-          const content =
-            fileEdit.instructions.find((instruction) =>
-              instruction.action_tokens.includes('replace_file'),
-            )?.code ??
-            fileEdit.instructions[0]?.code ??
-            '';
-          localPath = await deps.anvilEditStagingService.writeFile(
-            stagingWorkspace,
-            fileEdit.file_path,
-            content,
-          );
-          await emitEditDiagnostic(
-            requestContext,
-            'staging_file_create_local',
-            {
-              filePath: fileEdit.file_path,
-              operation,
-              fileExists: fileEdit.file_exists,
-            },
-          );
-        } else {
-          await emitEditDiagnostic(
-            requestContext,
-            'staging_file_download_started',
-            {
-              filePath: fileEdit.file_path,
-              operation,
-              fileExists: fileEdit.file_exists,
-            },
-          );
-          let downloaded: Awaited<
-            ReturnType<AnvilAgentEditService['downloadFile']>
-          >;
-          try {
-            downloaded = await deps.anvilAgentEditService.downloadFile(
-              projectId,
-              fileEdit.file_path,
-            );
-          } catch (error: unknown) {
-            await emitEditDiagnostic(
-              requestContext,
-              'staging_file_download_failed',
-              {
-                filePath: fileEdit.file_path,
-                operation,
-                fileExists: fileEdit.file_exists,
-                status: 'failed',
-              },
-            );
-            const reason =
-              error instanceof Error ? error.message : String(error);
-            throw new Error(
-              `Failed to download ${fileEdit.file_path} (operation: ${operation}): ${reason}`,
-              { cause: error },
-            );
-          }
-          localPath = await deps.anvilEditStagingService.copyFile(
-            stagingWorkspace,
-            fileEdit.file_path,
-            downloaded.localFilePath,
-          );
-          await deps.anvilAgentEditService.cleanUpLocalFile(
-            downloaded.localFilePath,
-          );
-          originalHash = downloaded.hash;
-        }
-        manifest.totalBytes = stagingWorkspace.totalBytes;
-        const entry: STAGED_FILE_ENTRY = {
-          projectPath: fileEdit.file_path,
-          localPath,
-          operation,
-          existedRemotely: operation !== 'create',
-          originalHash,
-          backupPath: null,
-          instructionIndexes: fileEdit.instructions.map((_, index) => index),
-          applied: false,
-          verified: false,
-          validationStatus: 'pending',
-          commitStatus: 'pending',
-        };
-        manifest.files.push(entry);
-        nextState.push({
-          ...fileEdit,
-          downloaded_local_file_path: localPath,
-          hash: originalHash,
-          backup_file: null,
-        });
-        await emitEditDiagnostic(requestContext, 'staging_file_prepared', {
-          filePath: fileEdit.file_path,
-          operation,
-        });
-      }
+      const milestoneInputs: STAGED_MILESTONE_INPUT[] = (
+        manifest.milestones ?? []
+      )
+        .map((milestone) => ({
+          milestoneId: milestone.id,
+          sequence: milestone.sequence,
+          dependsOn: milestone.dependsOn,
+          fileEdits: inputData.filter((file) =>
+            milestone.filePaths.includes(file.file_path),
+          ),
+        }))
+        .filter((milestone) => milestone.fileEdits.length > 0);
       requestContext.set('stagingManifest', manifest);
       await deps.anvilEditStagingService.writeManifest(
         stagingWorkspace,
         manifest,
       );
-      await context.setState(nextState);
-      return nextState;
+      return milestoneInputs;
     },
   });
 
@@ -2067,6 +2350,69 @@ const createStagedFileWorkflow = (deps: EditWorkflowDeps) =>
     )
     .commit();
 
+const createStagedMilestoneGateStep = (deps: EditWorkflowDeps) =>
+  createStep({
+    id: 'anvil-agent-staged-milestone-gate-step',
+    inputSchema: Z_STAGED_MILESTONE_INPUT,
+    outputSchema: Z_EDIT_AGENT_WORKFLOW_INPUT,
+    stateSchema: Z_EDIT_AGENT_WORKFLOW_INPUT,
+    execute: async (context) => {
+      const { inputData, requestContext } = context;
+      requestContext.set('activeMilestoneId', inputData.milestoneId);
+      const manifestValue = requestContext.get('stagingManifest');
+      if (
+        !manifestValue ||
+        typeof manifestValue !== 'object' ||
+        !('milestones' in manifestValue)
+      ) {
+        throw new Error(
+          `Staging manifest is unavailable for milestone ${inputData.milestoneId}`,
+        );
+      }
+      const manifest = manifestValue as STAGING_MANIFEST;
+      const milestone = manifest.milestones.find(
+        (item) => item.id === inputData.milestoneId,
+      );
+      if (!milestone) {
+        throw new Error(
+          `Milestone ${inputData.milestoneId} is missing from the staging manifest`,
+        );
+      }
+      const milestoneById = new Map(
+        manifest.milestones.map((item) => [item.id, item]),
+      );
+      const blocked = inputData.dependsOn.some(
+        (dependency) => milestoneById.get(dependency)?.status !== 'committed',
+      );
+      if (
+        milestone.status === 'repair_pending' ||
+        milestone.status === 'blocked' ||
+        blocked
+      ) {
+        milestone.status = blocked ? 'blocked' : milestone.status;
+        milestone.commitStatus = 'not-committed';
+        await persistStagingManifest(requestContext, manifest, deps);
+        return [];
+      }
+      if (milestone.status === 'committed') return [];
+      return inputData.fileEdits;
+    },
+  });
+
+const createStagedMilestoneWorkflow = (deps: EditWorkflowDeps) =>
+  createWorkflow({
+    id: 'anvil-agent-staged-milestone-workflow',
+    inputSchema: Z_STAGED_MILESTONE_INPUT,
+    outputSchema: Z_EDIT_AGENT_WORKFLOW_INPUT,
+    stateSchema: Z_EDIT_AGENT_WORKFLOW_INPUT,
+  })
+    .then(createStagedMilestoneGateStep(deps))
+    .foreach(createStagedPrepareFileStep(deps), { concurrency: 1 })
+    .foreach(createStagedFileWorkflow(deps), { concurrency: 1 })
+    .then(createStagedProjectValidationStep(deps))
+    .then(stagedCommitStepFactory(deps))
+    .commit();
+
 const createStagedProjectValidationStep = (deps: EditWorkflowDeps) =>
   createStep({
     id: STAGING_VALIDATE_STEP,
@@ -2079,6 +2425,27 @@ const createStagedProjectValidationStep = (deps: EditWorkflowDeps) =>
         throw new Error('Staging manifest is unavailable');
       }
       const current = manifest as STAGING_MANIFEST;
+      const activeMilestoneId = context.requestContext.get('activeMilestoneId');
+      const scopedFiles =
+        typeof activeMilestoneId === 'string'
+          ? current.files.filter(
+              (file) => file.milestoneId === activeMilestoneId,
+            )
+          : current.files;
+      const activeMilestone =
+        typeof activeMilestoneId === 'string'
+          ? current.milestones?.find(
+              (milestone) => milestone.id === activeMilestoneId,
+            )
+          : undefined;
+      if (
+        activeMilestone &&
+        ['repair_pending', 'blocked', 'failed', 'committed'].includes(
+          activeMilestone.status,
+        )
+      ) {
+        return context.inputData;
+      }
       await emitEditDiagnostic(
         context.requestContext,
         'staging_validation_started',
@@ -2088,7 +2455,7 @@ const createStagedProjectValidationStep = (deps: EditWorkflowDeps) =>
       );
       try {
         const uniquePaths = new Set<string>();
-        for (const file of current.files) {
+        for (const file of scopedFiles) {
           if (uniquePaths.has(file.projectPath)) {
             throw new Error(
               `Duplicate staged manifest path: ${file.projectPath}`,
@@ -2115,18 +2482,92 @@ const createStagedProjectValidationStep = (deps: EditWorkflowDeps) =>
           }
           if (file.operation === 'delete') continue;
           if (isCssFilePath(file.projectPath)) {
-            await validateCssStage(
-              deps.anvilHistoryService,
-              context.requestContext,
-              file.projectPath,
-              file.localPath,
-              'final',
-              true,
-            );
+            try {
+              await validateCssStage(
+                deps.anvilHistoryService,
+                context.requestContext,
+                file.projectPath,
+                file.localPath,
+                'final',
+                true,
+              );
+            } catch (error: unknown) {
+              await recordRepairableFailure(deps, context.requestContext, {
+                filePath: file.projectPath,
+                category: 'css-validation',
+                validator: 'css-validation',
+                diagnostic:
+                  error instanceof Error ? error.message : String(error),
+              });
+              file.validationStatus = 'repair_pending';
+              continue;
+            }
           }
           file.validationStatus = 'passed';
         }
-        await validateStagedProjectImports(deps, current);
+        await validateStagedProjectImports(
+          deps,
+          current,
+          typeof activeMilestoneId === 'string' ? activeMilestoneId : undefined,
+        );
+        const milestoneById = new Map(
+          (current.milestones ?? []).map((milestone) => [
+            milestone.id,
+            milestone,
+          ]),
+        );
+        for (const milestone of (current.milestones ?? []).filter(
+          (item) =>
+            typeof activeMilestoneId !== 'string' ||
+            item.id === activeMilestoneId,
+        )) {
+          const files = current.files.filter(
+            (file) => file.milestoneId === milestone.id,
+          );
+          const hasRepairableFailure = files.some(
+            (file) => file.validationStatus === 'repair_pending',
+          );
+          milestone.validationStatus = hasRepairableFailure
+            ? 'repair_pending'
+            : files.every((file) => file.validationStatus === 'passed')
+              ? 'passed'
+              : 'failed';
+          milestone.status =
+            milestone.validationStatus === 'repair_pending'
+              ? 'repair_pending'
+              : milestone.validationStatus === 'failed'
+                ? 'failed'
+                : 'pending';
+        }
+        for (const milestone of current.milestones ?? []) {
+          if (
+            milestone.dependsOn.some(
+              (dependency) =>
+                milestoneById.get(dependency)?.validationStatus ===
+                'repair_pending',
+            )
+          ) {
+            milestone.status = 'blocked';
+          }
+          const transactionId = context.requestContext.get('editTransactionId');
+          const originatingRunId =
+            context.requestContext.get('originatingRunId');
+          if (
+            typeof transactionId === 'string' &&
+            typeof originatingRunId === 'string'
+          ) {
+            await deps.anvilRepairStateService.upsertMilestone({
+              transactionId,
+              milestoneKey: milestone.id,
+              sequence: milestone.sequence,
+              affectedFiles: milestone.filePaths,
+              originatingRunId,
+              status: milestone.status,
+              validationStatus: milestone.validationStatus,
+              commitStatus: milestone.commitStatus,
+            });
+          }
+        }
         const stagingWorkspace = context.requestContext.get('stagingWorkspace');
         if (stagingWorkspace && typeof stagingWorkspace === 'object') {
           await deps.anvilEditStagingService.writeManifest(
@@ -2143,7 +2584,7 @@ const createStagedProjectValidationStep = (deps: EditWorkflowDeps) =>
         );
         return context.inputData;
       } catch (error) {
-        for (const file of current.files) file.validationStatus = 'failed';
+        for (const file of scopedFiles) file.validationStatus = 'failed';
         await emitEditDiagnostic(
           context.requestContext,
           'staging_validation_failed',
@@ -2156,7 +2597,7 @@ const createStagedProjectValidationStep = (deps: EditWorkflowDeps) =>
     },
   });
 
-const createStagedCommitStep = (deps: EditWorkflowDeps) =>
+const stagedCommitStepFactory = (deps: EditWorkflowDeps) =>
   createStep({
     id: STAGING_COMMIT_STEP,
     inputSchema: Z_EDIT_AGENT_WORKFLOW_INPUT,
@@ -2174,111 +2615,155 @@ const createStagedCommitStep = (deps: EditWorkflowDeps) =>
       )
         throw new Error('Staging manifest is unavailable');
       const manifest = manifestValue as STAGING_MANIFEST;
-      const committed: STAGED_FILE_ENTRY[] = [];
-      let attempted: STAGED_FILE_ENTRY | undefined;
-      await emitEditDiagnostic(context.requestContext, 'commit_started', {
-        fileCount: manifest.files.length,
-      });
-      try {
-        for (const file of manifest.files) {
-          const remoteState =
-            await deps.anvilAgentEditService.getProjectFileState(
-              projectId,
-              file.projectPath,
-            );
-          if (file.operation === 'create') {
-            if (remoteState.exists) {
-              throw new Error(
-                `Create target already exists: ${file.projectPath}`,
-              );
-            }
-            continue;
-          }
-          if (
-            !remoteState.exists ||
-            !file.originalHash ||
-            remoteState.hash !== file.originalHash
-          ) {
-            throw new Error(
-              `Remote file changed before commit: ${file.projectPath}`,
-            );
-          }
+      const activeMilestoneId = context.requestContext.get('activeMilestoneId');
+      const readyMilestones =
+        typeof activeMilestoneId === 'string'
+          ? getReadyMilestones(manifest.milestones ?? []).filter(
+              (milestone) => milestone.id === activeMilestoneId,
+            )
+          : getReadyMilestones(manifest.milestones ?? []);
+      const readyMilestoneIds = new Set(
+        readyMilestones.map((milestone) => milestone.id),
+      );
+      for (const milestone of manifest.milestones ?? []) {
+        if (
+          milestone.validationStatus === 'repair_pending' ||
+          milestone.status === 'blocked'
+        ) {
+          milestone.status =
+            milestone.validationStatus === 'repair_pending'
+              ? 'repair_pending'
+              : 'blocked';
+          milestone.commitStatus = 'not-committed';
         }
-
-        for (const file of manifest.files) {
-          if (file.operation !== 'create') {
-            file.backupPath = posix.join(
-              '.anvil-backups',
-              manifest.editRunId,
-              file.projectPath,
-            );
-            await persistStagingManifest(
-              context.requestContext,
-              manifest,
-              deps,
-            );
-            file.backupPath =
-              await deps.anvilAgentEditService.createCommitBackup(
+      }
+      const commitFiles = readyMilestones.flatMap((milestone) =>
+        manifest.files.filter(
+          (file) =>
+            file.validationStatus === 'passed' &&
+            file.milestoneId === milestone.id &&
+            readyMilestoneIds.has(file.milestoneId),
+        ),
+      );
+      await emitEditDiagnostic(context.requestContext, 'commit_started', {
+        fileCount: commitFiles.length,
+        pendingRepairFiles: manifest.files.length - commitFiles.length,
+        milestoneCount: readyMilestones.length,
+      });
+      for (const milestone of readyMilestones) {
+        const milestoneFiles = getMilestoneFiles(commitFiles, milestone.id);
+        if (milestoneFiles.length === 0) continue;
+        await emitEditDiagnostic(
+          context.requestContext,
+          'commit_milestone_started',
+          {
+            milestoneId: milestone.id,
+            fileCount: milestoneFiles.length,
+          },
+        );
+        const committed: STAGED_FILE_ENTRY[] = [];
+        const createdDirectories: string[] = [];
+        let attempted: STAGED_FILE_ENTRY | undefined;
+        try {
+          for (const file of milestoneFiles) {
+            const remoteState =
+              await deps.anvilAgentEditService.getProjectFileState(
                 projectId,
                 file.projectPath,
-                manifest.editRunId,
               );
-            await persistStagingManifest(
-              context.requestContext,
-              manifest,
-              deps,
-            );
+            if (file.operation === 'create') {
+              if (remoteState.exists) {
+                throw new Error(
+                  `Create target already exists: ${file.projectPath}`,
+                );
+              }
+            } else if (
+              !remoteState.exists ||
+              !file.originalHash ||
+              remoteState.hash !== file.originalHash
+            ) {
+              throw new Error(
+                `Remote file changed before commit: ${file.projectPath}`,
+              );
+            }
           }
-        }
 
-        for (const directory of [...manifest.directoriesToCreate].sort(
-          (left, right) => left.split('/').length - right.split('/').length,
-        )) {
-          if (
-            !(await deps.anvilAgentEditService.verifyProjectFolderExists(
-              projectId,
-              directory,
-            ))
-          ) {
-            manifest.createdDirectories.push(directory);
-            await persistStagingManifest(
-              context.requestContext,
-              manifest,
-              deps,
-            );
-            await deps.anvilAgentEditService.createProjectFolder(
-              projectId,
-              directory,
-            );
-            await persistStagingManifest(
-              context.requestContext,
-              manifest,
-              deps,
-            );
+          for (const file of milestoneFiles) {
+            if (file.operation !== 'create') {
+              file.backupPath = posix.join(
+                '.anvil-backups',
+                manifest.editRunId,
+                file.projectPath,
+              );
+              file.backupPath =
+                await deps.anvilAgentEditService.createCommitBackup(
+                  projectId,
+                  file.projectPath,
+                  manifest.editRunId,
+                );
+              await persistStagingManifest(
+                context.requestContext,
+                manifest,
+                deps,
+              );
+            }
           }
-        }
-        for (const file of manifest.files) {
-          attempted = file;
-          file.commitStatus = 'commit-started';
-          await persistStagingManifest(context.requestContext, manifest, deps);
-          await emitEditDiagnostic(
-            context.requestContext,
-            'commit_file_started',
-            { filePath: file.projectPath, operation: file.operation },
+
+          const milestoneDirectories = getMilestoneDirectories(
+            manifest.directoriesToCreate,
+            milestoneFiles,
           );
-          if (file.operation === 'create') {
-            await deps.anvilAgentEditService.createProjectFile(
-              projectId,
-              file.projectPath,
+          for (const directory of milestoneDirectories) {
+            if (
+              !(await deps.anvilAgentEditService.verifyProjectFolderExists(
+                projectId,
+                directory,
+              ))
+            ) {
+              await deps.anvilAgentEditService.createProjectFolder(
+                projectId,
+                directory,
+              );
+              createdDirectories.push(directory);
+              manifest.createdDirectories.push(directory);
+              await persistStagingManifest(
+                context.requestContext,
+                manifest,
+                deps,
+              );
+            }
+          }
+
+          for (const file of milestoneFiles) {
+            attempted = file;
+            file.commitStatus = 'commit-started';
+            await persistStagingManifest(
+              context.requestContext,
+              manifest,
+              deps,
             );
-            await deps.anvilAgentEditService.upload(
-              projectId,
-              file.localPath,
-              file.projectPath,
-              'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
+            await emitEditDiagnostic(
+              context.requestContext,
+              'commit_file_started',
+              {
+                filePath: file.projectPath,
+                operation: file.operation,
+                milestoneId: milestone.id,
+              },
             );
-          } else {
-            if (file.operation === 'delete') {
+            if (file.operation === 'create') {
+              await deps.anvilAgentEditService.createProjectFile(
+                projectId,
+                file.projectPath,
+              );
+              await deps.anvilAgentEditService.upload(
+                projectId,
+                file.localPath,
+                file.projectPath,
+                'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
+              );
+              file.commitStatus = 'uploaded';
+            } else if (file.operation === 'delete') {
               await deps.anvilAgentEditService.deleteProjectFile(
                 projectId,
                 file.projectPath,
@@ -2293,92 +2778,119 @@ const createStagedCommitStep = (deps: EditWorkflowDeps) =>
               );
               file.commitStatus = 'uploaded';
             }
-          }
-          committed.push(file);
-          const stagingWorkspace =
-            context.requestContext.get('stagingWorkspace');
-          if (stagingWorkspace && typeof stagingWorkspace === 'object') {
-            await deps.anvilEditStagingService.writeManifest(
-              stagingWorkspace as StagingWorkspace,
+            committed.push(file);
+            await persistStagingManifest(
+              context.requestContext,
               manifest,
+              deps,
             );
-          }
-          await emitEditDiagnostic(
-            context.requestContext,
-            'commit_file_completed',
-            { filePath: file.projectPath, status: file.commitStatus },
-          );
-        }
-        return context.inputData;
-      } catch (error) {
-        await emitEditDiagnostic(context.requestContext, 'commit_failed', {
-          filePath: attempted?.projectPath ?? null,
-          reason: error instanceof Error ? error.message : String(error),
-        });
-        let rollbackFailed = false;
-        for (const file of [
-          ...committed,
-          ...(attempted ? [attempted] : []),
-        ].reverse()) {
-          try {
-            if (file.operation === 'create')
-              await deps.anvilAgentEditService.removeCreatedProjectFile(
-                projectId,
-                file.projectPath,
-              );
-            else if (file.backupPath)
-              await deps.anvilAgentEditService.restore(
-                projectId,
-                file.backupPath,
-                file.projectPath,
-              );
-            file.commitStatus = 'rolled-back';
             await emitEditDiagnostic(
               context.requestContext,
-              'rollback_file_completed',
-              { filePath: file.projectPath },
-            );
-          } catch (rollbackError) {
-            rollbackFailed = true;
-            file.commitStatus = 'rollback-failed';
-            await emitEditDiagnostic(
-              context.requestContext,
-              'rollback_file_failed',
+              'commit_file_completed',
               {
                 filePath: file.projectPath,
-                reason:
-                  rollbackError instanceof Error
-                    ? rollbackError.message
-                    : String(rollbackError),
+                status: file.commitStatus,
+                milestoneId: milestone.id,
               },
             );
           }
-        }
-        for (const directory of [...manifest.createdDirectories].reverse()) {
-          try {
-            await deps.anvilAgentEditService.removeEmptyCreatedDirectory(
-              projectId,
-              directory,
-            );
-          } catch (directoryError) {
-            rollbackFailed = true;
-            await emitEditDiagnostic(
-              context.requestContext,
-              'rollback_file_failed',
-              {
-                filePath: directory,
-                reason:
-                  directoryError instanceof Error
-                    ? directoryError.message
-                    : String(directoryError),
-              },
-            );
+
+          milestone.status = 'committed';
+          milestone.commitStatus = 'committed';
+          await persistStagingManifest(context.requestContext, manifest, deps);
+          await emitEditDiagnostic(
+            context.requestContext,
+            'commit_milestone_completed',
+            {
+              milestoneId: milestone.id,
+              fileCount: milestoneFiles.length,
+            },
+          );
+        } catch (error) {
+          await emitEditDiagnostic(context.requestContext, 'commit_failed', {
+            filePath: attempted?.projectPath ?? null,
+            milestoneId: milestone.id,
+            reason: error instanceof Error ? error.message : String(error),
+          });
+          let rollbackFailed = false;
+          for (const file of getMilestoneRollbackFiles(
+            committed,
+            attempted,
+            milestone.id,
+          )) {
+            try {
+              if (file.operation === 'create') {
+                await deps.anvilAgentEditService.removeCreatedProjectFile(
+                  projectId,
+                  file.projectPath,
+                );
+              } else if (file.backupPath) {
+                await deps.anvilAgentEditService.restore(
+                  projectId,
+                  file.backupPath,
+                  file.projectPath,
+                );
+              }
+              file.commitStatus = 'rolled-back';
+              await emitEditDiagnostic(
+                context.requestContext,
+                'rollback_file_completed',
+                {
+                  filePath: file.projectPath,
+                  milestoneId: milestone.id,
+                },
+              );
+            } catch (rollbackError) {
+              rollbackFailed = true;
+              file.commitStatus = 'rollback-failed';
+              await emitEditDiagnostic(
+                context.requestContext,
+                'rollback_file_failed',
+                {
+                  filePath: file.projectPath,
+                  milestoneId: milestone.id,
+                  reason:
+                    rollbackError instanceof Error
+                      ? rollbackError.message
+                      : String(rollbackError),
+                },
+              );
+            }
           }
+          for (const directory of createdDirectories.reverse()) {
+            try {
+              await deps.anvilAgentEditService.removeEmptyCreatedDirectory(
+                projectId,
+                directory,
+              );
+            } catch (directoryError) {
+              rollbackFailed = true;
+              await emitEditDiagnostic(
+                context.requestContext,
+                'rollback_file_failed',
+                {
+                  filePath: directory,
+                  milestoneId: milestone.id,
+                  reason:
+                    directoryError instanceof Error
+                      ? directoryError.message
+                      : String(directoryError),
+                },
+              );
+            }
+          }
+          milestone.status = rollbackFailed ? 'failed' : 'pending';
+          milestone.commitStatus = rollbackFailed
+            ? 'rolled-back'
+            : 'rolled-back';
+          await persistStagingManifest(context.requestContext, manifest, deps);
+          if (rollbackFailed)
+            context.requestContext.set('preserveBackupsOnFailure', true);
+          throw error;
         }
-        if (rollbackFailed)
-          context.requestContext.set('preserveBackupsOnFailure', true);
-        throw error;
       }
+      await persistStagingManifest(context.requestContext, manifest, deps);
+      return context.inputData;
     },
   });
 
@@ -2396,6 +2908,73 @@ const createStagedCleanupStep = (deps: EditWorkflowDeps) =>
       await emitEditDiagnostic(context.requestContext, 'cleanup_started', {
         fileCount: manifest.files.length,
       });
+      if (context.requestContext.get('preserveRepairArtifacts') === true) {
+        await emitEditDiagnostic(
+          context.requestContext,
+          'cleanup_deferred_for_repair',
+          { fileCount: manifest.files.length },
+        );
+        return context.inputData;
+      }
+      const repairTransactionId =
+        context.requestContext.get('editTransactionId');
+      const repairApprovalId = context.requestContext.get('repairApprovalId');
+      if (
+        typeof repairTransactionId === 'string' &&
+        typeof repairApprovalId === 'string'
+      ) {
+        const bugs =
+          await deps.anvilRepairStateService.listOpenBugs(repairTransactionId);
+        for (const bug of bugs) {
+          await deps.anvilRepairStateService.resolveBug(
+            repairTransactionId,
+            bug.bug_key,
+          );
+          await appendWorkflowHistoryBestEffort(
+            deps.anvilHistoryService,
+            context.requestContext,
+            manifest.projectId,
+            {
+              subject: 'Repairable issue resolved',
+              status: 'success',
+              changesMade: `Resolved ${bug.category} finding.`,
+              files: Array.isArray(bug.affected_files)
+                ? bug.affected_files.filter(
+                    (file): file is string => typeof file === 'string',
+                  )
+                : [],
+              actor: 'anvil-edit-workflow.repair-resolver',
+              bugId: bug.bug_key,
+              validator: bug.validator,
+              originatingRunId: bug.originating_run_id,
+              repairRunId: repairApprovalId,
+              classification: 'resolved',
+            },
+          );
+          try {
+            await deps.anvilHistoryService.removeBugEntry(
+              manifest.projectId,
+              bug.bug_key,
+            );
+          } catch (error: unknown) {
+            await emitEditDiagnostic(
+              context.requestContext,
+              'bug_ledger_write_warning',
+              {
+                message: error instanceof Error ? error.message : String(error),
+                bugId: bug.bug_key,
+              },
+            );
+          }
+        }
+        await deps.anvilRepairStateService.completeRepairTransaction(
+          repairTransactionId,
+        );
+      } else if (typeof repairTransactionId === 'string') {
+        await deps.anvilRepairStateService.completeTransaction(
+          repairTransactionId,
+        );
+      }
       if (context.requestContext.get('preserveBackupsOnFailure') !== true) {
         for (const file of manifest.files) {
           if (file.backupPath)
@@ -2423,6 +3002,51 @@ const createStagedCleanupStep = (deps: EditWorkflowDeps) =>
     },
   });
 
+const createStagedFinalProjectValidationStep = (deps: EditWorkflowDeps) =>
+  createStep({
+    id: 'anvil-agent-staged-final-project-validation-step',
+    inputSchema: Z_EDIT_AGENT_WORKFLOW_INPUT,
+    outputSchema: Z_EDIT_AGENT_WORKFLOW_INPUT,
+    stateSchema: Z_EDIT_AGENT_WORKFLOW_INPUT,
+    execute: async (context) => {
+      context.requestContext.set('activeMilestoneId', null);
+      const manifestValue = context.requestContext.get('stagingManifest');
+      if (
+        !manifestValue ||
+        typeof manifestValue !== 'object' ||
+        !('files' in manifestValue)
+      ) {
+        throw new Error('Staging manifest is unavailable for final validation');
+      }
+      const manifest = manifestValue as STAGING_MANIFEST;
+      if (
+        manifest.milestones.some(
+          (milestone) =>
+            milestone.status === 'repair_pending' ||
+            milestone.status === 'blocked' ||
+            milestone.status === 'failed',
+        )
+      ) {
+        return context.inputData;
+      }
+      for (const file of manifest.files) {
+        if (file.operation !== 'delete' && isCssFilePath(file.projectPath)) {
+          await validateCssStage(
+            deps.anvilHistoryService,
+            context.requestContext,
+            file.projectPath,
+            file.localPath,
+            'final',
+            true,
+          );
+        }
+      }
+      await validateStagedProjectImports(deps, manifest);
+      await persistStagingManifest(context.requestContext, manifest, deps);
+      return context.inputData;
+    },
+  });
+
 export const createStagedEditWorkflow = (deps: EditWorkflowDeps) =>
   createWorkflow({
     id: 'anvil-agent-staged-edit-workflow',
@@ -2431,9 +3055,11 @@ export const createStagedEditWorkflow = (deps: EditWorkflowDeps) =>
     stateSchema: Z_EDIT_AGENT_WORKFLOW_INPUT,
   })
     .then(createStagedPrepareStep(deps))
-    .foreach(createStagedFileWorkflow(deps))
-    .then(createStagedProjectValidationStep(deps))
-    .then(createStagedCommitStep(deps))
+    .foreach(createStagedMilestoneWorkflow(deps), { concurrency: 1 })
+    .map(async ({ inputData }): Promise<EDIT_AGENT_INPUT> => {
+      return await Promise.resolve(inputData.flat() as EDIT_AGENT_INPUT);
+    })
+    .then(createStagedFinalProjectValidationStep(deps))
     .then(createStagedCleanupStep(deps))
     .commit();
 

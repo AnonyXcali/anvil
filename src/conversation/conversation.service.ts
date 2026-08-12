@@ -1,4 +1,4 @@
-import { Injectable, Logger, Inject } from '@nestjs/common';
+import { Injectable, Logger, Inject, Optional } from '@nestjs/common';
 import { Conversation } from './convesation.types';
 import { Queue } from 'bullmq';
 import { InjectQueue } from '@nestjs/bullmq';
@@ -12,6 +12,7 @@ import type { MessageListInput } from '@mastra/core/agent/message-list';
 import { AGENT_DIRECTORY } from 'src/agent.directory';
 import { generateKeys } from 'src/utils';
 import { ProjectService } from 'src/project/project.service';
+import { ConversationTranscriptService } from './conversation-transcript.service';
 
 const CONVERSATION_TIMEOUT_MS = 30_000;
 const CONVERSATION_TIMEOUT_MESSAGE =
@@ -34,6 +35,8 @@ export class ConversationService implements Conversation {
     private readonly mastraService: MastraService,
     private readonly channelService: ChannelsService,
     private readonly projectService: ProjectService,
+    @Optional()
+    private readonly transcriptService?: ConversationTranscriptService,
   ) {}
 
   async handleConversation(
@@ -252,14 +255,33 @@ export class ConversationService implements Conversation {
     }
   }
 
-  async storeConstructedMessageToDb(message: string, conversationId: string) {
+  async storeConstructedMessageToDb(
+    message: string,
+    conversationId: string,
+    sourceId = `conversation:${conversationId}`,
+  ) {
+    if (this.transcriptService) {
+      await this.transcriptService.storeAssistantMessage({
+        message,
+        conversationId,
+        sourceId,
+      });
+      return;
+    }
     await this.db
       .insertInto('preview_platform.message')
       .values({
-        message,
+        message: message.trim(),
         role: 'assistant',
         conversation_id: conversationId,
+        source_id: sourceId,
       })
+      .onConflict((oc) =>
+        oc.columns(['conversation_id', 'source_id']).doUpdateSet({
+          message: message.trim(),
+          updated_at: new Date(),
+        }),
+      )
       .execute();
   }
 
@@ -269,6 +291,7 @@ export class ConversationService implements Conversation {
       .selectFrom('preview_platform.message')
       .select(['role', 'message'])
       .where('conversation_id', '=', conversationId)
+      .orderBy('sequence_number', 'asc')
       .execute();
   }
 }

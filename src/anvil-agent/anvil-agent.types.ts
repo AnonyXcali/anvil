@@ -597,6 +597,12 @@ export type RgEvent = BeginEvent | MatchEvent | EndEvent | SummaryEvent;
 
 export type AnvilAgentContext = {
   projectId: string;
+  conversationId?: string;
+  jobId?: string;
+  originatingRunId?: string;
+  repairRunId?: string;
+  editTransactionId?: string;
+  repairApprovalId?: string;
   callCount: number;
   maxSearchCalls?: number;
   structurePlan?: STRUCTURE_PLAN;
