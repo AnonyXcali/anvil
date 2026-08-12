@@ -19,6 +19,7 @@ import {
 import { buildRegexPattern } from 'src/utils';
 import { ToolExecutionContext } from '@mastra/core/tools';
 import { StreamEventType } from 'src/anvil-agent/anvil-agent-chunk.dictionary';
+import { normalizeFileSearchKeywords } from 'src/anvil-agent/anvil-agent-search-pattern';
 
 //TODO: move this to types
 type RemoteStepResult = {
@@ -1798,9 +1799,15 @@ EOF`,
     projectId: string,
     context: ToolExecutionContext,
   ) {
-    const sshNode = new NodeSSH();
     const steps: RemoteStepResult[] = [];
     const baseDir = `/mnt/preview-data/preview-platform/workspaces/${projectId}`;
+
+    this.validateProjectId(projectId);
+    if (!request.query.keyword) {
+      throw new Error('No keywords for file search provided');
+    }
+    const pattern = normalizeFileSearchKeywords(request.query.keyword);
+    const sshNode = new NodeSSH();
 
     try {
       await sshNode.connect({
@@ -1809,16 +1816,6 @@ EOF`,
         username: process.env.SSH_USERNAME!,
         privateKey: readFileSync(process.env.SSH_PRIVATE_KEY_PATH!, 'utf8'),
       });
-
-      if (!projectId) {
-        throw new Error('Project ID is not provided');
-      }
-
-      if (!request.query.keyword) {
-        throw new Error('No keywords for file search provided');
-      }
-
-      const pattern = buildRegexPattern(request.query.keyword);
 
       const command = buildFileSearchCommand({
         pattern,

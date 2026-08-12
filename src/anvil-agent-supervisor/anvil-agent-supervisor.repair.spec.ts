@@ -12,10 +12,14 @@ const builder = (result?: unknown) => {
     orderBy: jest.fn().mockReturnThis(),
     set: jest.fn().mockReturnThis(),
     returning: jest.fn().mockReturnThis(),
+    values: jest.fn().mockReturnThis(),
     column: jest.fn().mockReturnThis(),
     onConflict: jest.fn().mockReturnThis(),
+    doUpdateSet: jest.fn().mockReturnThis(),
+    doNothing: jest.fn().mockReturnThis(),
     execute: jest.fn().mockResolvedValue(result),
     executeTakeFirst: jest.fn().mockResolvedValue(result),
+    executeTakeFirstOrThrow: jest.fn().mockResolvedValue(result),
   };
   return query;
 };
@@ -42,6 +46,7 @@ const createService = (input: {
       .mockReturnValueOnce(attemptQuery)
       .mockReturnValueOnce(transactionUpdate)
       .mockReturnValueOnce(bugsUpdate),
+    insertInto: jest.fn().mockReturnValue(builder({ id: 'workflow-run-1' })),
   };
   const queue = {
     add: jest.fn().mockResolvedValue({ id: 'repair-job-1' }),
@@ -115,5 +120,202 @@ describe('repair supervisor queue boundary', () => {
     ).rejects.toThrow('Repair budget exhausted for transaction-1');
     expect(queue.add).not.toHaveBeenCalled();
     expect(jobService.insert).not.toHaveBeenCalled();
+  });
+});
+
+describe('repair approval reconciliation', () => {
+  const createStreamingService = (chunks: unknown[]) => {
+    const { service } = createService({});
+    const publish = jest.fn().mockResolvedValue(undefined);
+    const storeAssistantMessage = jest.fn().mockResolvedValue(undefined);
+    const findPendingRepairForRun = jest.fn();
+    const createOrReuseRepairApproval = jest.fn();
+    const stream = {
+      runId: 'supervisor-run-1',
+      fullStream: chunks,
+      messageList: { get: { response: { db: () => [] } } },
+    };
+    Object.assign(service, {
+      mastraService: {
+        getAgent: jest.fn().mockReturnValue({
+          stream: jest.fn().mockResolvedValue(stream),
+        }),
+      },
+      streamPublisher: { publish },
+      transcriptService: { storeAssistantMessage },
+      anvilRepairStateService: {
+        findPendingRepairForRun,
+        createOrReuseRepairApproval,
+      },
+    });
+    return {
+      service,
+      publish,
+      findPendingRepairForRun,
+      createOrReuseRepairApproval,
+    };
+  };
+
+  it('reconciles persisted repair state after an optional pending event', async () => {
+    const candidate = {
+      projectId: 'project-1',
+      conversationId: 'conversation-1',
+      originatingRunId: 'supervisor-run-1',
+      transactionId: 'transaction-1',
+      bugs: [{ bugKey: 'BUG-1', severity: 'repairable', category: 'css' }],
+    };
+    const {
+      service,
+      publish,
+      findPendingRepairForRun,
+      createOrReuseRepairApproval,
+    } = createStreamingService([
+      {
+        type: 'edit_repair_pending',
+        payload: { transactionId: 'transaction-1' },
+      },
+    ]);
+    findPendingRepairForRun.mockResolvedValue(candidate);
+    createOrReuseRepairApproval.mockResolvedValue({
+      approvalId: 'approval-1',
+      created: true,
+      transactionId: 'transaction-1',
+      bugCount: 1,
+    });
+
+    await service.askSupervisorAgent(
+      [],
+      'conversation-1',
+      'job-1',
+      'project-1',
+      'stream-1',
+    );
+
+    expect(findPendingRepairForRun).toHaveBeenCalledWith({
+      projectId: 'project-1',
+      conversationId: 'conversation-1',
+      originatingRunId: 'supervisor-run-1',
+    });
+    expect(createOrReuseRepairApproval).toHaveBeenCalledWith(candidate);
+    expect(publish).toHaveBeenCalled();
+    expect(
+      publish.mock.calls.some(
+        ([event]: unknown[]) =>
+          typeof event === 'object' &&
+          event !== null &&
+          'chunk' in event &&
+          typeof event.chunk === 'object' &&
+          event.chunk !== null &&
+          'type' in event.chunk &&
+          event.chunk.type === 'approval_required' &&
+          'payload' in event.chunk &&
+          typeof event.chunk.payload === 'object' &&
+          event.chunk.payload !== null &&
+          'approvalId' in event.chunk.payload &&
+          event.chunk.payload.approvalId === 'approval-1',
+      ),
+    ).toBe(true);
+  });
+
+  it('does not publish a duplicate approval when persisted approval is reused', async () => {
+    const {
+      service,
+      publish,
+      findPendingRepairForRun,
+      createOrReuseRepairApproval,
+    } = createStreamingService([]);
+    findPendingRepairForRun.mockResolvedValue({
+      projectId: 'project-1',
+      conversationId: 'conversation-1',
+      originatingRunId: 'supervisor-run-1',
+      transactionId: 'transaction-1',
+      bugs: [],
+    });
+    createOrReuseRepairApproval.mockResolvedValue({
+      approvalId: 'approval-1',
+      created: false,
+      transactionId: 'transaction-1',
+      bugCount: 0,
+    });
+
+    await service.askSupervisorAgent(
+      [],
+      'conversation-1',
+      'job-1',
+      'project-1',
+      'stream-1',
+    );
+
+    expect(
+      publish.mock.calls.some(
+        ([event]: unknown[]) =>
+          typeof event === 'object' &&
+          event !== null &&
+          'chunk' in event &&
+          typeof event.chunk === 'object' &&
+          event.chunk !== null &&
+          'type' in event.chunk &&
+          event.chunk.type === 'approval_required',
+      ),
+    ).toBe(false);
+  });
+
+  it('creates repair approval from persisted state even without a diagnostic event', async () => {
+    const {
+      service,
+      publish,
+      findPendingRepairForRun,
+      createOrReuseRepairApproval,
+    } = createStreamingService([]);
+    findPendingRepairForRun.mockResolvedValue({
+      projectId: 'project-1',
+      conversationId: 'conversation-1',
+      originatingRunId: 'supervisor-run-1',
+      transactionId: 'transaction-1',
+      bugs: [{ bugKey: 'BUG-1', severity: 'repairable', category: 'css' }],
+    });
+    createOrReuseRepairApproval.mockResolvedValue({
+      approvalId: 'approval-1',
+      created: true,
+      transactionId: 'transaction-1',
+      bugCount: 1,
+    });
+
+    await service.askSupervisorAgent(
+      [],
+      'conversation-1',
+      'job-1',
+      'project-1',
+      'stream-1',
+    );
+
+    expect(
+      publish.mock.calls.some(
+        ([event]: unknown[]) =>
+          typeof event === 'object' &&
+          event !== null &&
+          'chunk' in event &&
+          typeof event.chunk === 'object' &&
+          event.chunk !== null &&
+          'type' in event.chunk &&
+          event.chunk.type === 'approval_required',
+      ),
+    ).toBe(true);
+  });
+
+  it('does not reconcile after a terminal workflow error', async () => {
+    const { service, findPendingRepairForRun } = createStreamingService([
+      { type: 'workflow-execution-abort' },
+    ]);
+
+    await service.askSupervisorAgent(
+      [],
+      'conversation-1',
+      'job-1',
+      'project-1',
+      'stream-1',
+    );
+
+    expect(findPendingRepairForRun).not.toHaveBeenCalled();
   });
 });

@@ -17,6 +17,22 @@ contract reports `completed_with_issues`; one repair approval then starts a
 separate bounded supervisor run over the `workflow-resume` stream. Successful
 repair resolves bugs by stable ID before final cleanup.
 
+Repair approval is application-owned and is not a Mastra suspension. When a
+repairable finding persists `edit_transaction` and `edit_bug` state, the edit
+workflow may terminate with `completed_with_issues`. After the supervisor
+stream ends, `AnvilAgentSupervisorService` reconciles PostgreSQL repair state
+and idempotently creates or reuses the synthetic application approval
+`workflow_id = anvil-agent-repair-workflow`, `run_id = repair:<transactionId>`.
+Only a newly created approval is published to the UI. The optional
+`edit_repair_pending` custom event is a fast-path notification and is not
+required for approval creation. Strict workflow errors bypass reconciliation
+and remain `workflow_error` results.
+
+The initial plan approval remains Mastra's `tool-call-suspended` flow. After a
+repair approval, CoreService queues a separate supervisor repair run using the
+original transaction and originating workflow run; BullMQ job IDs remain
+operational identifiers only.
+
 See [`anvil-edit-workflow-flowchart.svg`](./anvil-edit-workflow-flowchart.svg) for the visual happy path, including the new-file and existing-file branches.
 ## Phase milestones and transcript persistence
 

@@ -87,6 +87,39 @@ describe('search tool request validation', () => {
     );
   });
 
+  it('accepts supported file-search literals and globs', () => {
+    const request = baseRequest();
+    request.type = 'file_search';
+    request.query.files_path_for_expansion = null;
+    request.query.keyword = ['*.tsx', '*.ts', '*.css', 'src/**/*.json'];
+
+    expect(() => assertValidSearchToolRequest(request)).not.toThrow();
+  });
+
+  it('reports the indexed keyword for invalid file-search patterns', () => {
+    const request = baseRequest();
+    request.type = 'file_search';
+    request.query.files_path_for_expansion = null;
+    request.query.keyword = ['*.tsx', 'src/[A].tsx'];
+
+    expect(() => assertValidSearchToolRequest(request)).toThrow(
+      'query.keyword[1] contains unsupported glob syntax',
+    );
+    expect(() => assertValidSearchToolRequest(request)).toThrow(
+      InvalidSearchToolRequestError,
+    );
+  });
+
+  it('preserves content-search keyword behavior', () => {
+    const request = baseRequest();
+    request.type = 'content_search';
+    request.query.files_path_for_expansion = null;
+    request.query.files_paths_for_content_search = ['src/app/App.tsx'];
+    request.query.keyword = ['className[='];
+
+    expect(() => assertValidSearchToolRequest(request)).not.toThrow();
+  });
+
   it('requires keywords and paths for the other search modes', () => {
     const fileRequest = baseRequest();
     fileRequest.type = 'file_search';

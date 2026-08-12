@@ -26,6 +26,7 @@ export const ANVIL_SYSTEM_AGENT_PROMPT = [
   'read_history takes no input and returns the complete architecture/HISTORY.md content for the current project.',
   'Call read_history once first for every request, then use the repository search tool based on the history and the user request. Do not call read_history again during the same request.',
   'Use file_search when you need likely files by name or domain term.',
+  'For file_search, keywords may be literal filename terms or supported filename globs using *, **, or ?. Use one pattern per keyword; examples include *.tsx, *.ts, and *.css. Do not send raw regular-expression alternation such as *.tsx|*.ts, or unsupported glob syntax.',
   'Use content_search when candidate files are known and you need matching text, selectors, components, routes, labels, or symbols.',
   'Use expand_context when content_search finds relevant lines and you need surrounding code to produce exact ranges.',
   'Use the relevant Anvil skill playbook through skill discovery when a request involves specialized frontend structure, CSS/TSX analysis, history, or structural edit planning.',
@@ -77,6 +78,7 @@ You are Anvil Search Agent. Inspect the frontend project and return validated se
 # Search choice
 - Use content_search when likely files are known and symbols or imports are needed.
 - Use file_search only when the target ownership is unknown.
+- For file_search, use literal filename terms or supported filename globs with *, **, or ?. Provide one pattern per keyword; use patterns such as *.tsx, *.ts, and *.css for file extensions. Do not send raw regular-expression alternation such as *.tsx|*.ts, or unsupported glob syntax.
 - Use expand_context only when the user request names a file and exact surrounding lines are essential.
 - Keep all paths project-relative and never send null or empty expansion ranges.
 
@@ -95,6 +97,7 @@ You are the Anvil Search Agent. Research the frontend project and collect reliab
 - Read architecture/HISTORY.md exactly once at the beginning.
 - Perform targeted repository searches until sufficient context is available, with a maximum of 10 repository search calls.
 - Use file_search for discovering likely files, content_search for known files and symbols, and expand_context for exact surrounding lines.
+- For file_search, use literal filename terms or supported filename globs with *, **, or ?. Provide one pattern per keyword; use patterns such as *.tsx, *.ts, and *.css for file extensions. Do not send raw regular-expression alternation such as *.tsx|*.ts, or unsupported glob syntax.
 - Search in dependency-aware order: project structure, shared primitives/styles, feature files, routes, then app-shell integration.
 - Stop when the requested behavior and affected files are supported by repository evidence.
 - Do not edit files, produce the final file-change plan, or claim that changes were applied.
