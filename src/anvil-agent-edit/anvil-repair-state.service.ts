@@ -14,12 +14,26 @@ export type RepairTransactionStatus =
 export type RepairBugInput = {
   bugKey: string;
   milestoneId?: string;
+  milestoneKey?: string;
   severity: string;
   category: string;
   validator: string;
   diagnostic: string;
   affectedFiles: string[];
   originatingRunId: string;
+};
+
+export type RepairApprovalCandidate = {
+  projectId: string;
+  conversationId: string;
+  originatingRunId: string;
+  transactionId: string;
+  bugs: Array<{
+    bugKey: string;
+    milestoneKey?: string | null;
+    severity: string;
+    category: string;
+  }>;
 };
 
 @Injectable()
@@ -150,12 +164,27 @@ export class AnvilRepairStateService {
     transactionId: string,
     input: RepairBugInput,
   ): Promise<string> {
+    let milestoneId = input.milestoneId ?? null;
+    if (input.milestoneKey) {
+      const milestone = await this.db
+        .selectFrom('preview_platform.edit_milestone')
+        .select('id')
+        .where('transaction_id', '=', transactionId)
+        .where('milestone_key', '=', input.milestoneKey)
+        .executeTakeFirst();
+      if (!milestone) {
+        throw new Error(
+          `Milestone ${input.milestoneKey} was not found for transaction ${transactionId}`,
+        );
+      }
+      milestoneId = milestone.id;
+    }
     const affectedFiles = JSON.stringify(input.affectedFiles);
     const row = await this.db
       .insertInto('preview_platform.edit_bug')
       .values({
         transaction_id: transactionId,
-        milestone_id: input.milestoneId ?? null,
+        milestone_id: milestoneId,
         bug_key: input.bugKey,
         severity: input.severity,
         category: input.category,
@@ -225,5 +254,158 @@ export class AnvilRepairStateService {
       .selectAll()
       .where('id', '=', transactionId)
       .executeTakeFirst();
+  }
+
+  async findPendingRepairForRun(input: {
+    projectId: string;
+    conversationId: string;
+    originatingRunId: string;
+  }): Promise<RepairApprovalCandidate | undefined> {
+    const transaction = await this.db
+      .selectFrom('preview_platform.edit_transaction')
+      .selectAll()
+      .where('project_id', '=', input.projectId)
+      .where('conversation_id', '=', input.conversationId)
+      .where('originating_run_id', '=', input.originatingRunId)
+      .where('status', 'in', [
+        'completed_with_issues',
+        'repair_pending',
+        'repairing',
+      ])
+      .orderBy('created_at', 'desc')
+      .executeTakeFirst();
+
+    if (!transaction) return undefined;
+
+    const bugs = await this.db
+      .selectFrom('preview_platform.edit_bug')
+      .leftJoin(
+        'preview_platform.edit_milestone',
+        'preview_platform.edit_milestone.id',
+        'preview_platform.edit_bug.milestone_id',
+      )
+      .select([
+        'preview_platform.edit_bug.bug_key as bugKey',
+        'preview_platform.edit_bug.severity as severity',
+        'preview_platform.edit_bug.category as category',
+        'preview_platform.edit_milestone.milestone_key as milestoneKey',
+      ])
+      .where('preview_platform.edit_bug.transaction_id', '=', transaction.id)
+      .where('preview_platform.edit_bug.status', 'in', ['open', 'repairing'])
+      .orderBy('preview_platform.edit_bug.created_at', 'desc')
+      .execute();
+
+    if (bugs.length === 0) return undefined;
+
+    return {
+      projectId: transaction.project_id,
+      conversationId: transaction.conversation_id,
+      originatingRunId: transaction.originating_run_id,
+      transactionId: transaction.id,
+      bugs,
+    };
+  }
+
+  async createOrReuseRepairApproval(
+    candidate: RepairApprovalCandidate,
+  ): Promise<{
+    approvalId: string;
+    created: boolean;
+    transactionId: string;
+    bugCount: number;
+  }> {
+    if (candidate.bugs.length === 0) {
+      throw new Error(
+        `Cannot create repair approval for transaction ${candidate.transactionId}: no open repair bugs`,
+      );
+    }
+
+    const transaction = await this.db
+      .selectFrom('preview_platform.edit_transaction')
+      .select([
+        'id',
+        'project_id',
+        'conversation_id',
+        'originating_run_id',
+        'status',
+      ])
+      .where('id', '=', candidate.transactionId)
+      .where('project_id', '=', candidate.projectId)
+      .where('conversation_id', '=', candidate.conversationId)
+      .where('originating_run_id', '=', candidate.originatingRunId)
+      .where('status', 'in', [
+        'completed_with_issues',
+        'repair_pending',
+        'repairing',
+      ])
+      .executeTakeFirst();
+
+    if (!transaction) {
+      throw new Error(
+        `Cannot create repair approval for transaction ${candidate.transactionId}: repair state is not eligible`,
+      );
+    }
+
+    const runId = `repair:${candidate.transactionId}`;
+    const suspendedStep = {
+      type: 'repair_approval_required',
+      transactionId: candidate.transactionId,
+      originatingRunId: candidate.originatingRunId,
+      bugCount: candidate.bugs.length,
+      bugKeys: candidate.bugs.map((bug) => bug.bugKey),
+    } as unknown as Json;
+
+    const inserted = await this.db
+      .insertInto('preview_platform.workflow_run')
+      .values({
+        workflow_id: 'anvil-agent-repair-workflow',
+        run_id: runId,
+        conversation_id: candidate.conversationId,
+        project_id: candidate.projectId,
+        status: 'suspended',
+        suspended_step: suspendedStep,
+        resume_agent_id: null,
+        resume_tool_call_id: null,
+        resume_tool_name: null,
+      })
+      .onConflict((oc) => oc.column('run_id').doNothing())
+      .returning('id')
+      .executeTakeFirst();
+
+    if (inserted) {
+      await this.db
+        .updateTable('preview_platform.edit_transaction')
+        .set({ status: 'repair_pending' })
+        .where('id', '=', candidate.transactionId)
+        .execute();
+      return {
+        approvalId: inserted.id,
+        created: true,
+        transactionId: candidate.transactionId,
+        bugCount: candidate.bugs.length,
+      };
+    }
+
+    const existing = await this.db
+      .selectFrom('preview_platform.workflow_run')
+      .select('id')
+      .where('run_id', '=', runId)
+      .executeTakeFirstOrThrow();
+    await this.db
+      .updateTable('preview_platform.edit_transaction')
+      .set({ status: 'repair_pending' })
+      .where('id', '=', candidate.transactionId)
+      .where('status', 'in', [
+        'completed_with_issues',
+        'repair_pending',
+        'repairing',
+      ])
+      .execute();
+    return {
+      approvalId: existing.id,
+      created: false,
+      transactionId: candidate.transactionId,
+      bugCount: candidate.bugs.length,
+    };
   }
 }

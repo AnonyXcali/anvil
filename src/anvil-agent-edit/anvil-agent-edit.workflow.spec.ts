@@ -1,5 +1,7 @@
 import { unwrapStagedBranchResult } from './staged-branch-result';
 import type { FILE_EDIT } from './anvil-agent-edit.types';
+import { readFileSync } from 'fs';
+import { join } from 'path';
 
 const fileEdit: FILE_EDIT = {
   file_path: 'src/features/flowers/FlowerCard.tsx',
@@ -69,5 +71,33 @@ describe('staged branch result unwrapping', () => {
         },
       }),
     ).toThrow('returned an invalid FILE_EDIT');
+  });
+});
+
+describe('staged repairable failure persistence', () => {
+  it('passes the active milestone key through durable repair persistence', () => {
+    const source = readFileSync(
+      join(__dirname, 'anvil-agent-edit.workflow.ts'),
+      'utf8',
+    );
+
+    expect(source).toContain('milestoneKey:');
+    expect(source).toContain("typeof activeMilestoneId === 'string'");
+  });
+
+  it('keeps durable repair failures strict and history writes downstream', () => {
+    const source = readFileSync(
+      join(__dirname, 'anvil-agent-edit.workflow.ts'),
+      'utf8',
+    );
+
+    expect(source).toContain('Failed to persist repairable failure');
+    expect(source).toContain('Failed to persist repairable transaction state');
+    const repairPersistence = source.slice(
+      source.indexOf('async function recordRepairableFailure'),
+    );
+    expect(
+      repairPersistence.indexOf('setTransactionStatus(\n      transactionId'),
+    ).toBeLessThan(repairPersistence.indexOf('appendHistoryEntry(projectId'));
   });
 });

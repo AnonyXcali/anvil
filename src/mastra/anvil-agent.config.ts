@@ -18,7 +18,7 @@ export const ANVIL_SEARCH_EXECUTION_POLICIES: Record<
   SearchExecutionMode,
   SearchExecutionPolicy
 > = {
-  normal: { mode: 'normal', maxSearchCalls: 10, maxSteps: 20 },
+  normal: { mode: 'normal', maxSearchCalls: 20, maxSteps: 20 },
   greedy: { mode: 'greedy', maxSearchCalls: 1, maxSteps: 4 },
 };
 

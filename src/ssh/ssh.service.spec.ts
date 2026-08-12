@@ -136,4 +136,68 @@ describe('SshService', () => {
     expect(command).toContain('find');
     expect(command).toContain('rmdir --');
   });
+
+  it('rejects malformed file-search patterns before connecting to SSH', async () => {
+    await expect(
+      service.searchFile(
+        {
+          tool_call: 'search_tool',
+          type: 'file_search',
+          query: {
+            files_paths_for_content_search: [],
+            files_path_for_expansion: null,
+            keyword: ['../*.tsx'],
+          },
+          history: [],
+        } as never,
+        'project-id',
+        {} as never,
+      ),
+    ).rejects.toThrow('project-relative pattern');
+
+    expect(connectMock).not.toHaveBeenCalled();
+    expect(execCommandMock).not.toHaveBeenCalled();
+  });
+
+  it('compiles file-search globs before building the remote command', async () => {
+    await service.searchFile(
+      {
+        tool_call: 'search_tool',
+        type: 'file_search',
+        query: {
+          files_paths_for_content_search: [],
+          files_path_for_expansion: null,
+          keyword: ['*.tsx', '*.ts', '*.css'],
+        },
+        history: [],
+      } as never,
+      'project-id',
+      {} as never,
+    );
+
+    const command = lastExecutedCommand();
+    expect(command).toContain("'(?:[^/]*\\.tsx|[^/]*\\.ts|[^/]*\\.css)'");
+    expect(command).not.toContain("'*.tsx|*.ts|*.css'");
+    expect(command).toContain("-g '!node_modules/**'");
+    expect(connectMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('treats regex alternation as a literal file-search keyword', async () => {
+    await service.searchFile(
+      {
+        tool_call: 'search_tool',
+        type: 'file_search',
+        query: {
+          files_paths_for_content_search: [],
+          files_path_for_expansion: null,
+          keyword: ['App|index.tsx'],
+        },
+        history: [],
+      } as never,
+      'project-id',
+      {} as never,
+    );
+
+    expect(lastExecutedCommand()).toContain("'(?:App\\|index\\.tsx)'");
+  });
 });

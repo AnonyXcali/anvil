@@ -18,6 +18,8 @@ type Builder = {
   columns: jest.Mock;
   column: jest.Mock;
   doUpdateSet: jest.Mock;
+  doNothing: jest.Mock;
+  leftJoin: jest.Mock;
 };
 
 const createBuilder = (result?: unknown): Builder => {
@@ -36,6 +38,8 @@ const createBuilder = (result?: unknown): Builder => {
   builder.columns = jest.fn().mockReturnValue(builder);
   builder.column = jest.fn().mockReturnValue(builder);
   builder.doUpdateSet = jest.fn().mockReturnValue(builder);
+  builder.doNothing = jest.fn().mockReturnValue(builder);
+  builder.leftJoin = jest.fn().mockReturnValue(builder);
   builder.onConflict = jest.fn((callback: (value: Builder) => unknown) => {
     callback(builder);
     return builder;
@@ -203,5 +207,200 @@ describe('AnvilRepairStateService', () => {
       'repairing',
     ]);
     expect(select.orderBy).toHaveBeenCalledWith('created_at', 'desc');
+  });
+
+  it('finds a durable repair candidate and only includes open and repairing bugs', async () => {
+    const transaction = createBuilder({
+      id: 'transaction-1',
+      project_id: 'project-1',
+      conversation_id: 'conversation-1',
+      originating_run_id: 'workflow-run-1',
+    });
+    const bugs = createBuilder([
+      {
+        bugKey: 'BUG-1',
+        severity: 'repairable',
+        category: 'css-syntax',
+        milestoneKey: 'feature',
+      },
+    ]);
+    const selectFrom = jest
+      .fn()
+      .mockReturnValueOnce(transaction)
+      .mockReturnValueOnce(bugs);
+    const service = new AnvilRepairStateService({ selectFrom } as never);
+
+    await expect(
+      service.findPendingRepairForRun({
+        projectId: 'project-1',
+        conversationId: 'conversation-1',
+        originatingRunId: 'workflow-run-1',
+      }),
+    ).resolves.toEqual({
+      projectId: 'project-1',
+      conversationId: 'conversation-1',
+      originatingRunId: 'workflow-run-1',
+      transactionId: 'transaction-1',
+      bugs: [
+        {
+          bugKey: 'BUG-1',
+          severity: 'repairable',
+          category: 'css-syntax',
+          milestoneKey: 'feature',
+        },
+      ],
+    });
+    expect(transaction.where).toHaveBeenNthCalledWith(4, 'status', 'in', [
+      'completed_with_issues',
+      'repair_pending',
+      'repairing',
+    ]);
+    expect(bugs.where).toHaveBeenLastCalledWith(
+      'preview_platform.edit_bug.status',
+      'in',
+      ['open', 'repairing'],
+    );
+  });
+
+  it('creates a deterministic repair approval without using an update-on-conflict', async () => {
+    const transaction = createBuilder({
+      id: 'transaction-1',
+      project_id: 'project-1',
+      conversation_id: 'conversation-1',
+      originating_run_id: 'workflow-run-1',
+      status: 'completed_with_issues',
+    });
+    const insert = createBuilder({ id: 'approval-1' });
+    const update = createBuilder();
+    const insertInto = jest.fn().mockReturnValue(insert);
+    const service = new AnvilRepairStateService({
+      selectFrom: jest.fn().mockReturnValue(transaction),
+      insertInto,
+      updateTable: jest.fn().mockReturnValue(update),
+    } as never);
+    const candidate = {
+      projectId: 'project-1',
+      conversationId: 'conversation-1',
+      originatingRunId: 'workflow-run-1',
+      transactionId: 'transaction-1',
+      bugs: [
+        {
+          bugKey: 'BUG-1',
+          severity: 'repairable',
+          category: 'css-syntax',
+          milestoneKey: 'feature',
+        },
+      ],
+    };
+
+    await expect(
+      service.createOrReuseRepairApproval(candidate),
+    ).resolves.toEqual({
+      approvalId: 'approval-1',
+      created: true,
+      transactionId: 'transaction-1',
+      bugCount: 1,
+    });
+    expect(insert.values).toHaveBeenCalledWith(
+      expect.objectContaining({ run_id: 'repair:transaction-1' }),
+    );
+    expect(insert.doNothing).toHaveBeenCalled();
+    expect(insert.doUpdateSet).not.toHaveBeenCalled();
+  });
+
+  it('re-reads an existing approval and does not reset its terminal status', async () => {
+    const transaction = createBuilder({
+      id: 'transaction-1',
+      project_id: 'project-1',
+      conversation_id: 'conversation-1',
+      originating_run_id: 'workflow-run-1',
+      status: 'repair_pending',
+    });
+    const insert = createBuilder(undefined);
+    const existing = createBuilder({ id: 'approval-terminal' });
+    const update = createBuilder();
+    const insertInto = jest.fn().mockReturnValue(insert);
+    const selectFrom = jest
+      .fn()
+      .mockReturnValueOnce(transaction)
+      .mockReturnValueOnce(existing);
+    const service = new AnvilRepairStateService({
+      insertInto,
+      selectFrom,
+      updateTable: jest.fn().mockReturnValue(update),
+    } as never);
+
+    await expect(
+      service.createOrReuseRepairApproval({
+        projectId: 'project-1',
+        conversationId: 'conversation-1',
+        originatingRunId: 'workflow-run-1',
+        transactionId: 'transaction-1',
+        bugs: [
+          { bugKey: 'BUG-1', severity: 'repairable', category: 'css-syntax' },
+        ],
+      }),
+    ).resolves.toEqual({
+      approvalId: 'approval-terminal',
+      created: false,
+      transactionId: 'transaction-1',
+      bugCount: 1,
+    });
+    expect(existing.where).toHaveBeenCalledWith(
+      'run_id',
+      '=',
+      'repair:transaction-1',
+    );
+    expect(existing.set).not.toHaveBeenCalled();
+    expect(update.set).toHaveBeenCalledWith({ status: 'repair_pending' });
+    expect(update.set).toHaveBeenCalledWith({ status: 'repair_pending' });
+  });
+
+  it('does not return a repair candidate without open bugs', async () => {
+    const transaction = createBuilder({
+      id: 'transaction-1',
+      project_id: 'project-1',
+      conversation_id: 'conversation-1',
+      originating_run_id: 'workflow-run-1',
+    });
+    const bugs = createBuilder([]);
+    const service = new AnvilRepairStateService({
+      selectFrom: jest
+        .fn()
+        .mockReturnValueOnce(transaction)
+        .mockReturnValueOnce(bugs),
+    } as never);
+
+    await expect(
+      service.findPendingRepairForRun({
+        projectId: 'project-1',
+        conversationId: 'conversation-1',
+        originatingRunId: 'workflow-run-1',
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  it('resolves a milestone key before writing the bug foreign key', async () => {
+    const milestone = createBuilder({ id: 'milestone-1' });
+    const bugInsert = createBuilder({ id: 'bug-1' });
+    const service = new AnvilRepairStateService({
+      selectFrom: jest.fn().mockReturnValue(milestone),
+      insertInto: jest.fn().mockReturnValue(bugInsert),
+    } as never);
+
+    await service.upsertBug('transaction-1', {
+      bugKey: 'BUG-1',
+      milestoneKey: 'feature',
+      severity: 'repairable',
+      category: 'css-syntax',
+      validator: 'css-validator',
+      diagnostic: 'Invalid CSS',
+      affectedFiles: [],
+      originatingRunId: 'workflow-run-1',
+    });
+
+    expect(bugInsert.values).toHaveBeenCalledWith(
+      expect.objectContaining({ milestone_id: 'milestone-1' }),
+    );
   });
 });

@@ -1,5 +1,9 @@
 import type { TOOL_REQUEST_SHAPE } from './anvil-agent.types';
 import { isProjectRelativePath } from './anvil-agent-search.path';
+import {
+  InvalidFileSearchPatternError,
+  normalizeFileSearchKeywords,
+} from './anvil-agent-search-pattern';
 
 export type SearchRequestValidationDetails = {
   searchType: TOOL_REQUEST_SHAPE['type'];
@@ -48,6 +52,16 @@ export function assertValidSearchToolRequest(
   if (request.type === 'file_search') {
     if (!request.query.keyword?.length) {
       fail(request, 'query.keyword', 'must contain at least one keyword');
+    }
+    for (const [index, keyword] of request.query.keyword.entries()) {
+      try {
+        normalizeFileSearchKeywords([keyword]);
+      } catch (error) {
+        if (error instanceof InvalidFileSearchPatternError) {
+          fail(request, `query.keyword[${index}]`, error.reason);
+        }
+        throw error;
+      }
     }
     return;
   }

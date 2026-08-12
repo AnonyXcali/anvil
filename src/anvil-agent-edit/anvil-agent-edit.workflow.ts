@@ -410,6 +410,7 @@ async function recordRepairableFailure(
     validator: string;
     diagnostic: string;
     milestoneId?: string;
+    milestoneKey?: string;
   },
 ): Promise<void> {
   const transactionId = requestContext.get('editTransactionId');
@@ -420,11 +421,9 @@ async function recordRepairableFailure(
     typeof originatingRunId !== 'string' ||
     typeof projectId !== 'string'
   ) {
-    await emitEditDiagnostic(requestContext, 'repair_state_write_warning', {
-      message: `Repairable failure has no persisted transaction for ${input.filePath}`,
-      filePath: input.filePath,
-    });
-    return;
+    throw new Error(
+      `Repairable failure cannot be persisted for ${input.filePath}: missing transaction linkage`,
+    );
   }
   const bugKey = `BUG-${createHash('sha256')
     .update(`${input.category}:${input.filePath}:${input.validator}`)
@@ -434,7 +433,8 @@ async function recordRepairableFailure(
   try {
     await deps.anvilRepairStateService.upsertBug(transactionId, {
       bugKey,
-      milestoneId: input.milestoneId,
+      milestoneId: input.milestoneId ?? input.milestoneKey,
+      milestoneKey: input.milestoneKey,
       severity: 'repairable',
       category: input.category,
       validator: input.validator,
@@ -443,10 +443,23 @@ async function recordRepairableFailure(
       originatingRunId,
     });
   } catch (error: unknown) {
-    await emitEditDiagnostic(requestContext, 'repair_state_write_warning', {
-      message: error instanceof Error ? error.message : String(error),
-      filePath: input.filePath,
-    });
+    throw new Error(
+      `Failed to persist repairable failure for ${input.filePath}: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
+  try {
+    await deps.anvilRepairStateService.setTransactionStatus(
+      transactionId,
+      'completed_with_issues',
+    );
+  } catch (error: unknown) {
+    throw new Error(
+      `Failed to persist repairable transaction state for ${input.filePath}: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
   }
   try {
     await deps.anvilHistoryService.appendHistoryEntry(projectId, {
@@ -456,7 +469,7 @@ async function recordRepairableFailure(
       files: [input.filePath],
       actor: 'anvil-edit-workflow.repair-classifier',
       bugId: bugKey,
-      milestoneId: input.milestoneId,
+      milestoneId: input.milestoneId ?? input.milestoneKey,
       validator: input.validator,
       originatingRunId,
       classification: 'repairable',
@@ -468,7 +481,7 @@ async function recordRepairableFailure(
         '- status: open',
         '- severity: repairable',
         `- category: ${input.category}`,
-        `- milestone: ${input.milestoneId ?? 'unknown'}`,
+        `- milestone: ${input.milestoneId ?? input.milestoneKey ?? 'unknown'}`,
         `- validator: ${input.validator}`,
         `- originating_run_id: ${originatingRunId}`,
         `- affected_files: ${input.filePath}`,
@@ -481,17 +494,6 @@ async function recordRepairableFailure(
     await emitEditDiagnostic(requestContext, 'history_write_warning', {
       message: error instanceof Error ? error.message : String(error),
       subject: `Repairable ${input.category} finding`,
-    });
-  }
-  try {
-    await deps.anvilRepairStateService.setTransactionStatus(
-      transactionId,
-      'completed_with_issues',
-    );
-  } catch (error: unknown) {
-    await emitEditDiagnostic(requestContext, 'repair_state_write_warning', {
-      message: error instanceof Error ? error.message : String(error),
-      filePath: input.filePath,
     });
   }
   requestContext.set('preserveRepairArtifacts', true);
@@ -1128,6 +1130,11 @@ const createVerifyStep = (deps: EditWorkflowDeps) => {
                   filePath: inputData.file_path,
                   category: 'verifier-scorer',
                   validator: 'rubric-scorer',
+                  milestoneKey:
+                    typeof context.requestContext.get('activeMilestoneId') ===
+                    'string'
+                      ? context.requestContext.get('activeMilestoneId')
+                      : undefined,
                   diagnostic: scorerError,
                 });
               } else {
@@ -1150,6 +1157,11 @@ const createVerifyStep = (deps: EditWorkflowDeps) => {
                   filePath: inputData.file_path,
                   category: 'css-validation',
                   validator: 'css-validation',
+                  milestoneKey:
+                    typeof context.requestContext.get('activeMilestoneId') ===
+                    'string'
+                      ? context.requestContext.get('activeMilestoneId')
+                      : undefined,
                   diagnostic: postCssValidation.findings
                     .map((finding) => finding.message)
                     .join('; '),
@@ -2496,6 +2508,10 @@ const createStagedProjectValidationStep = (deps: EditWorkflowDeps) =>
                 filePath: file.projectPath,
                 category: 'css-validation',
                 validator: 'css-validation',
+                milestoneKey:
+                  typeof activeMilestoneId === 'string'
+                    ? activeMilestoneId
+                    : undefined,
                 diagnostic:
                   error instanceof Error ? error.message : String(error),
               });
@@ -3031,14 +3047,34 @@ const createStagedFinalProjectValidationStep = (deps: EditWorkflowDeps) =>
       }
       for (const file of manifest.files) {
         if (file.operation !== 'delete' && isCssFilePath(file.projectPath)) {
-          await validateCssStage(
-            deps.anvilHistoryService,
-            context.requestContext,
-            file.projectPath,
-            file.localPath,
-            'final',
-            true,
-          );
+          try {
+            await validateCssStage(
+              deps.anvilHistoryService,
+              context.requestContext,
+              file.projectPath,
+              file.localPath,
+              'final',
+              true,
+            );
+          } catch (error: unknown) {
+            await recordRepairableFailure(deps, context.requestContext, {
+              filePath: file.projectPath,
+              category: 'css-validation',
+              validator: 'css-validation',
+              milestoneId: file.milestoneId ?? undefined,
+              diagnostic:
+                error instanceof Error ? error.message : String(error),
+            });
+            file.validationStatus = 'repair_pending';
+            const milestone = manifest.milestones.find(
+              (item) => item.id === file.milestoneId,
+            );
+            if (milestone) {
+              milestone.status = 'repair_pending';
+              milestone.validationStatus = 'repair_pending';
+              milestone.commitStatus = 'not-committed';
+            }
+          }
         }
       }
       await validateStagedProjectImports(deps, manifest);

@@ -20,7 +20,7 @@ import {
   getTranscriptMessage,
 } from 'src/anvil-agent/anvil-agent-streaming.helpers';
 import { AnvilAgentStreamPublisher } from 'src/anvil-agent/anvil-agent-stream-publisher.service';
-import { AnvilHistoryService } from 'src/anvil-history/anvil-history.service';
+import { AnvilRepairStateService } from 'src/anvil-agent-edit/anvil-repair-state.service';
 import { ANVIL_SUPERVISOR_AGENT_JOB_DATA } from './anvil-agent-supervisor.types';
 import { ConversationTranscriptService } from 'src/conversation/conversation-transcript.service';
 
@@ -49,7 +49,7 @@ export class AnvilAgentSupervisorService {
     private readonly jobService: JobService,
     private readonly mastraService: MastraService,
     private readonly streamPublisher: AnvilAgentStreamPublisher,
-    private readonly anvilHistoryService: AnvilHistoryService,
+    private readonly anvilRepairStateService: AnvilRepairStateService,
     private readonly transcriptService: ConversationTranscriptService,
     @Inject(KYSELY_DB) private readonly db: Kysely<DB>,
   ) {}
@@ -76,9 +76,6 @@ export class AnvilAgentSupervisorService {
     requestContext.set('projectId', projectId);
     requestContext.set('conversationId', conversationId);
     requestContext.set('jobId', jobId);
-    if (repair?.repairTransactionId) {
-      requestContext.set('repairRunId', jobId);
-    }
     if (originatingRunId?.trim()) {
       requestContext.set('originatingRunId', originatingRunId);
     }
@@ -105,9 +102,32 @@ export class AnvilAgentSupervisorService {
     if (typeof resultStream.runId === 'string' && resultStream.runId.trim()) {
       // This is the supervisor run persisted in workflow_run. It is distinct
       // from the BullMQ job ID and is carried into nested edit execution.
-      requestContext.set('originatingRunId', resultStream.runId);
+      if (repair?.repairTransactionId) {
+        requestContext.set('repairRunId', resultStream.runId);
+        await this.db
+          .updateTable('preview_platform.edit_bug')
+          .set({ repair_run_id: resultStream.runId })
+          .where('transaction_id', '=', repair.repairTransactionId)
+          .where('status', 'in', ['open', 'repairing'])
+          .execute();
+      } else {
+        requestContext.set('originatingRunId', resultStream.runId);
+        await this.upsertWorkflowRun({
+          workflowId: FRONTEND_ENGINEERING_WORKFLOW_ID,
+          runId: resultStream.runId,
+          conversationId,
+          projectId,
+          status: 'running',
+          suspendedStep: null,
+          resumeAgentId: null,
+          resumeToolCallId: null,
+          resumeToolName: null,
+        });
+        this.logger.log(`Workflow run persisted: ${resultStream.runId}`);
+      }
     }
     const transcriptParts: string[] = [];
+    let repairOriginatingRunId = requestContext.get('originatingRunId');
     const publishChunk = async (
       chunk: unknown,
       options: { recordTranscript?: boolean } = {},
@@ -131,7 +151,7 @@ export class AnvilAgentSupervisorService {
       });
     };
     let workflowErrorPublished = false;
-    let repairApprovalCreated = false;
+    let terminalWorkflowError = false;
 
     const publishAppEvent = async (chunk: unknown): Promise<boolean> => {
       const appEvent = buildAppStreamEvent(chunk);
@@ -183,6 +203,7 @@ export class AnvilAgentSupervisorService {
       }
       const isTerminalWorkflowError = await publishAppEvent(chunk);
       if (isTerminalWorkflowError) {
+        terminalWorkflowError = true;
         abortController.abort(new Error('Nested workflow failed'));
         break;
       }
@@ -190,43 +211,16 @@ export class AnvilAgentSupervisorService {
       const chunkType = getStreamChunkType(chunk);
       const { workflowId, runId } = getWorkflowIdentifiers(chunk);
 
-      if (chunkType === 'edit_repair_pending' && !repairApprovalCreated) {
-        const payload =
-          chunk && typeof chunk === 'object' && 'payload' in chunk
-            ? (chunk as { payload?: unknown }).payload
-            : undefined;
-        const transactionId =
-          payload && typeof payload === 'object' && 'transactionId' in payload
-            ? (payload as { transactionId?: unknown }).transactionId
-            : undefined;
-        if (typeof transactionId === 'string' && transactionId.trim()) {
-          const repairOriginatingRunId =
-            typeof runId === 'string' && runId.trim()
-              ? runId
-              : requestContext.get('originatingRunId');
-          if (
-            typeof repairOriginatingRunId !== 'string' ||
-            !repairOriginatingRunId.trim()
-          ) {
-            throw new Error(
-              `Repair approval for transaction ${transactionId} is missing its originating workflow run ID`,
-            );
-          }
-          const approvalId = await this.createRepairApproval({
-            transactionId,
-            conversationId,
-            projectId,
-            originatingRunId: repairOriginatingRunId,
-          });
-          repairApprovalCreated = true;
-          await publishApprovalRequired({
-            approvalId,
-            title: 'Review remaining issues?',
-            message:
-              'The requested changes were applied, but a few issues remain to be fixed.',
-            summary:
-              'The requested changes are partially complete. Approve a focused repair pass to resolve the remaining issues.',
-          });
+      if (chunkType === 'edit_repair_pending') {
+        // Keep this event as a fast-path signal for streams that emit it, but
+        // reconcile against persisted repair state after the stream settles.
+        if (
+          (typeof repairOriginatingRunId !== 'string' ||
+            !repairOriginatingRunId.trim()) &&
+          typeof runId === 'string' &&
+          runId.trim()
+        ) {
+          repairOriginatingRunId = runId;
         }
         continue;
       }
@@ -321,6 +315,74 @@ export class AnvilAgentSupervisorService {
         });
       }
     }
+
+    const normalizedRepairOriginatingRunId =
+      typeof repairOriginatingRunId === 'string'
+        ? repairOriginatingRunId.trim()
+        : '';
+    this.logger.log(
+      `Repair reconciliation gate: terminalWorkflowError=${terminalWorkflowError}, repairOriginatingRunId=${normalizedRepairOriginatingRunId || '(missing)'}`,
+    );
+
+    if (terminalWorkflowError) {
+      this.logger.debug(
+        'Repair reconciliation skipped because a terminal workflow error was emitted',
+      );
+    } else if (!normalizedRepairOriginatingRunId) {
+      this.logger.warn(
+        'Repair reconciliation skipped because the originating workflow run ID is missing',
+      );
+    } else {
+      try {
+        const candidate =
+          await this.anvilRepairStateService.findPendingRepairForRun({
+            projectId,
+            conversationId,
+            originatingRunId: normalizedRepairOriginatingRunId,
+          });
+        if (candidate) {
+          this.logger.log(
+            `Repair state found for workflow run ${normalizedRepairOriginatingRunId}: transaction ${candidate.transactionId}, open bugs ${candidate.bugs.length}`,
+          );
+          const approval =
+            await this.anvilRepairStateService.createOrReuseRepairApproval(
+              candidate,
+            );
+          this.logger.log(
+            `Repair approval ${approval.created ? 'created' : 'reused'}: ${approval.approvalId} for transaction ${approval.transactionId}`,
+          );
+          if (approval.created) {
+            await publishApprovalRequired({
+              approvalId: approval.approvalId,
+              title: 'Review remaining issues?',
+              message:
+                'The requested changes were applied, but a few issues remain to be fixed.',
+              summary:
+                'The requested changes are partially complete. Approve a focused repair pass to resolve the remaining issues.',
+            });
+          }
+        } else {
+          this.logger.debug(
+            `No eligible repair state found for workflow run ${normalizedRepairOriginatingRunId}`,
+          );
+        }
+      } catch (error) {
+        this.logger.error(
+          `Repair-state reconciliation failed for workflow run ${normalizedRepairOriginatingRunId}; preserving the original supervisor result`,
+          error instanceof Error ? error.stack : undefined,
+        );
+      }
+    }
+
+    if (repair?.repairApprovalId) {
+      await this.db
+        .updateTable('preview_platform.workflow_run')
+        .set({ status: terminalWorkflowError ? 'failed' : 'completed' })
+        .where('id', '=', repair.repairApprovalId)
+        .where('status', '=', 'running')
+        .execute();
+    }
+
     await this.transcriptService.storeAssistantMessage({
       conversationId,
       message: transcriptParts.join(''),
@@ -350,72 +412,6 @@ export class AnvilAgentSupervisorService {
     }
 
     return (snapshot ?? null) as Json | null;
-  }
-
-  private async createRepairApproval(input: {
-    transactionId: string;
-    conversationId: string;
-    projectId: string;
-    originatingRunId: string;
-  }): Promise<string> {
-    const historyContext = await Promise.allSettled([
-      this.anvilHistoryService.readBugs(input.projectId),
-      this.anvilHistoryService.readHistory(input.projectId),
-    ]);
-    this.logger.debug(
-      `Repair summary context loaded for transaction ${input.transactionId}: bugs=${historyContext[0]?.status === 'fulfilled' ? historyContext[0].value.length : 0}, history=${historyContext[1]?.status === 'fulfilled' ? historyContext[1].value.length : 0}`,
-    );
-    const bugs = await this.db
-      .selectFrom('preview_platform.edit_bug')
-      .select(['bug_key', 'severity', 'category'])
-      .where('transaction_id', '=', input.transactionId)
-      .where('status', 'in', ['open', 'repairing'])
-      .orderBy('created_at', 'desc')
-      .execute();
-    if (bugs.length === 0) {
-      throw new Error(
-        `Repair approval cannot be created without open bugs for transaction ${input.transactionId}`,
-      );
-    }
-
-    const syntheticRunId = `repair:${input.transactionId}`;
-    const suspendedStep = {
-      type: 'repair_approval_required',
-      transactionId: input.transactionId,
-      originatingRunId: input.originatingRunId,
-      bugCount: bugs.length,
-      bugKeys: bugs.map((bug) => bug.bug_key),
-    } as unknown as Json;
-    const row = await this.db
-      .insertInto('preview_platform.workflow_run')
-      .values({
-        workflow_id: 'anvil-agent-repair-workflow',
-        run_id: syntheticRunId,
-        conversation_id: input.conversationId,
-        project_id: input.projectId,
-        status: 'suspended',
-        suspended_step: suspendedStep,
-        resume_agent_id: null,
-        resume_tool_call_id: null,
-        resume_tool_name: null,
-      })
-      .onConflict((oc) =>
-        oc.column('run_id').doUpdateSet({
-          status: 'suspended',
-          suspended_step: suspendedStep,
-        }),
-      )
-      .returning('id')
-      .executeTakeFirstOrThrow();
-    await this.db
-      .updateTable('preview_platform.edit_transaction')
-      .set({ status: 'repair_pending' })
-      .where('id', '=', input.transactionId)
-      .execute();
-    this.logger.log(
-      `Repair approval record saved for transaction ${input.transactionId}; approval ${row.id}`,
-    );
-    return row.id;
   }
 
   private async upsertWorkflowRun({
@@ -611,7 +607,6 @@ export class AnvilAgentSupervisorService {
       .updateTable('preview_platform.edit_bug')
       .set((eb) => ({
         status: 'repairing',
-        repair_run_id: String(job.id),
         attempt_count: eb('attempt_count', '+', 1),
       }))
       .where('transaction_id', '=', transactionId)

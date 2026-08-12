@@ -23,6 +23,16 @@ repair supervisor run. `BUGS.md` contains unresolved project-facing entries;
 successful repair removes entries by stable bug ID and appends resolution
 metadata to `HISTORY.md`.
 
+Repair approval reconciliation is idempotent at the application layer. A
+candidate is eligible only when its project, conversation, and authoritative
+`originating_run_id` match an `edit_transaction` in
+`completed_with_issues`, `repair_pending`, or `repairing` state and at least
+one linked bug is `open` or `repairing`. The synthetic
+`anvil-agent-repair-workflow` row uses `repair:<transactionId>` as its stable
+run ID; retries and duplicate stream notifications reuse that row and do not
+publish a second approval. Repair-state lookup or approval persistence errors
+are backend diagnostics and do not replace the original stream result.
+
 Mastra agents and tools do not own application persistence. `ProjectService`
 resolves project preview metadata for conversation orchestration, and the
 browser tool receives the resulting preview resource through its input schema.
